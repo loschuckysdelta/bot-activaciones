@@ -7,48 +7,51 @@ from telebot import types
 # CONFIGURACIÓN
 # =========================================================
 
-API_URL = "https://server-yape.vercel.app/api/xpress/create_token"
+API_CREAR_TOKEN = "https://server-yape.vercel.app/api/xpress/create_token"
+API_DESCONTAR = "https://activaciones.vercel.app/api/deduct_credits"
+
 API_KEY = "MELEYS"
 
-# IDs que pueden generar tokens
 ADMIN_IDS = [
     8635600472
 ]
 
-# Guarda la duración seleccionada por cada usuario
+# Precio de cada token
+COSTOS_TOKEN = {
+    7: 5,
+    15: 10,
+    30: 15
+}
+
+# Selección temporal de cada usuario
 SELECCION_TOKEN = {}
 
 
 # =========================================================
-# OBTENER USUARIO
-# =========================================================
-
-def obtener_usuario(obj):
-    return obj.from_user
-
-
-# =========================================================
-# MENÚ PRINCIPAL
+# TEXTO DEL MENÚ
 # =========================================================
 
 def texto_menu(obj, dias):
 
-    usuario = obtener_usuario(obj)
+    usuario = obj.from_user
 
-    if usuario.username:
-        username = f"@{usuario.username}"
-    else:
-        username = usuario.first_name or "Sin username"
+    username = (
+        f"@{usuario.username}"
+        if usuario.username
+        else usuario.first_name or "Sin username"
+    )
+
+    costo = COSTOS_TOKEN.get(dias, 0)
 
     return (
         "<b>[#YapeXpress] ➣ GENERAR TOKEN</b>\n\n"
 
         "👨‍💼 <b>| TU ESTADO</b>\n"
-        f"- Usuario ➣ {html.escape(username)}\n"
-        "- Saldo ➣ ∞ ILIMITADO\n\n"
+        f"- Usuario ➣ {html.escape(username)}\n\n"
 
         "⚙️ <b>| CONFIGURACIÓN</b>\n"
-        f"- Duración ➣ <b>{dias} días</b>\n\n"
+        f"- Duración ➣ <b>{dias} días</b>\n"
+        f"- Costo ➣ <b>{costo} créditos</b>\n\n"
 
         "📌 <b>| INFORMACIÓN</b>\n"
         "- Selecciona la duración del token.\n"
@@ -57,7 +60,7 @@ def texto_menu(obj, dias):
 
 
 # =========================================================
-# BOTONERA
+# BOTONERA PRINCIPAL
 # =========================================================
 
 def teclado_token(user_id):
@@ -66,56 +69,51 @@ def teclado_token(user_id):
 
     teclado = types.InlineKeyboardMarkup(row_width=2)
 
-    boton_7 = types.InlineKeyboardButton(
-        "✅ 7 días" if dias == 7 else "⬜ 7 días",
+    btn7 = types.InlineKeyboardButton(
+        "✅ 7 días • 5 créditos"
+        if dias == 7
+        else "⬜ 7 días • 5 créditos",
         callback_data="token_dias_7"
     )
 
-    boton_15 = types.InlineKeyboardButton(
-        "✅ 15 días" if dias == 15 else "⬜ 15 días",
+    btn15 = types.InlineKeyboardButton(
+        "✅ 15 días • 10 créditos"
+        if dias == 15
+        else "⬜ 15 días • 10 créditos",
         callback_data="token_dias_15"
     )
 
-    boton_30 = types.InlineKeyboardButton(
-        "✅ 30 días" if dias == 30 else "⬜ 30 días",
+    btn30 = types.InlineKeyboardButton(
+        "✅ 30 días • 15 créditos"
+        if dias == 30
+        else "⬜ 30 días • 15 créditos",
         callback_data="token_dias_30"
     )
 
-    boton_generar = types.InlineKeyboardButton(
+    generar = types.InlineKeyboardButton(
         "🎟 GENERAR TOKEN",
         callback_data="token_generar"
     )
 
-    boton_cancelar = types.InlineKeyboardButton(
+    cancelar = types.InlineKeyboardButton(
         "❌ CANCELAR",
         callback_data="token_cancelar"
     )
 
-    teclado.add(
-        boton_7,
-        boton_15
-    )
-
-    teclado.add(
-        boton_30
-    )
-
-    teclado.add(
-        boton_generar
-    )
-
-    teclado.add(
-        boton_cancelar
-    )
+    teclado.add(btn7)
+    teclado.add(btn15)
+    teclado.add(btn30)
+    teclado.add(generar)
+    teclado.add(cancelar)
 
     return teclado
 
 
 # =========================================================
-# BOTONERA DESPUÉS DE GENERAR
+# BOTONERA TOKEN GENERADO
 # =========================================================
 
-def teclado_token_generado():
+def teclado_final():
 
     teclado = types.InlineKeyboardMarkup()
 
@@ -137,7 +135,7 @@ def teclado_token_generado():
 
 
 # =========================================================
-# REGISTRAR TOKEN YAPE
+# REGISTRAR COMANDOS
 # =========================================================
 
 def registrar_token_yape(bot):
@@ -151,17 +149,13 @@ def registrar_token_yape(bot):
 
         user_id = message.from_user.id
 
-        # SOLO ADMIN
         if user_id not in ADMIN_IDS:
-
             bot.reply_to(
                 message,
                 "❌ <b>No tienes permisos para usar este comando.</b>"
             )
-
             return
 
-        # Por defecto 7 días
         SELECCION_TOKEN[user_id] = 7
 
         bot.send_message(
@@ -172,127 +166,70 @@ def registrar_token_yape(bot):
         )
 
     # =====================================================
-    # SELECCIONAR 7 DÍAS
+    # FUNCIÓN CAMBIAR DÍAS
+    # =====================================================
+
+    def cambiar_dias(call, dias):
+
+        user_id = call.from_user.id
+
+        if user_id not in ADMIN_IDS:
+
+            bot.answer_callback_query(
+                call.id,
+                "❌ No tienes permisos.",
+                show_alert=True
+            )
+
+            return
+
+        SELECCION_TOKEN[user_id] = dias
+
+        try:
+            bot.edit_message_text(
+                texto_menu(call, dias),
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=teclado_token(user_id),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+
+        bot.answer_callback_query(
+            call.id,
+            f"✅ {dias} días seleccionado"
+        )
+
+    # =====================================================
+    # 7 DÍAS
     # =====================================================
 
     @bot.callback_query_handler(
         func=lambda call: call.data == "token_dias_7"
     )
     def seleccionar_7(call):
-
-        user_id = call.from_user.id
-
-        if user_id not in ADMIN_IDS:
-
-            bot.answer_callback_query(
-                call.id,
-                "❌ No tienes permisos.",
-                show_alert=True
-            )
-
-            return
-
-        SELECCION_TOKEN[user_id] = 7
-
-        try:
-
-            bot.edit_message_text(
-                texto_menu(call, 7),
-                call.message.chat.id,
-                call.message.message_id,
-                reply_markup=teclado_token(user_id),
-                parse_mode="HTML"
-            )
-
-        except Exception:
-            pass
-
-        bot.answer_callback_query(
-            call.id,
-            "✅ 7 días seleccionado"
-        )
+        cambiar_dias(call, 7)
 
     # =====================================================
-    # SELECCIONAR 15 DÍAS
+    # 15 DÍAS
     # =====================================================
 
     @bot.callback_query_handler(
         func=lambda call: call.data == "token_dias_15"
     )
     def seleccionar_15(call):
-
-        user_id = call.from_user.id
-
-        if user_id not in ADMIN_IDS:
-
-            bot.answer_callback_query(
-                call.id,
-                "❌ No tienes permisos.",
-                show_alert=True
-            )
-
-            return
-
-        SELECCION_TOKEN[user_id] = 15
-
-        try:
-
-            bot.edit_message_text(
-                texto_menu(call, 15),
-                call.message.chat.id,
-                call.message.message_id,
-                reply_markup=teclado_token(user_id),
-                parse_mode="HTML"
-            )
-
-        except Exception:
-            pass
-
-        bot.answer_callback_query(
-            call.id,
-            "✅ 15 días seleccionado"
-        )
+        cambiar_dias(call, 15)
 
     # =====================================================
-    # SELECCIONAR 30 DÍAS
+    # 30 DÍAS
     # =====================================================
 
     @bot.callback_query_handler(
         func=lambda call: call.data == "token_dias_30"
     )
     def seleccionar_30(call):
-
-        user_id = call.from_user.id
-
-        if user_id not in ADMIN_IDS:
-
-            bot.answer_callback_query(
-                call.id,
-                "❌ No tienes permisos.",
-                show_alert=True
-            )
-
-            return
-
-        SELECCION_TOKEN[user_id] = 30
-
-        try:
-
-            bot.edit_message_text(
-                texto_menu(call, 30),
-                call.message.chat.id,
-                call.message.message_id,
-                reply_markup=teclado_token(user_id),
-                parse_mode="HTML"
-            )
-
-        except Exception:
-            pass
-
-        bot.answer_callback_query(
-            call.id,
-            "✅ 30 días seleccionado"
-        )
+        cambiar_dias(call, 30)
 
     # =====================================================
     # GENERAR TOKEN
@@ -305,7 +242,6 @@ def registrar_token_yape(bot):
 
         user_id = call.from_user.id
 
-        # SOLO ADMIN
         if user_id not in ADMIN_IDS:
 
             bot.answer_callback_query(
@@ -316,22 +252,22 @@ def registrar_token_yape(bot):
 
             return
 
-        # Obtener días seleccionados
         dias = SELECCION_TOKEN.get(user_id, 7)
+        costo = COSTOS_TOKEN[dias]
 
         bot.answer_callback_query(
             call.id,
             "⏳ Generando token..."
         )
 
+        # =================================================
+        # PASO 1: GENERAR TOKEN
+        # =================================================
+
         try:
 
-            # =================================================
-            # PETICIÓN API
-            # =================================================
-
-            response = requests.post(
-                API_URL,
+            respuesta_token = requests.post(
+                API_CREAR_TOKEN,
                 headers={
                     "x-api-key": API_KEY,
                     "Content-Type": "application/json"
@@ -342,190 +278,187 @@ def registrar_token_yape(bot):
                 timeout=20
             )
 
-            # =================================================
-            # ERROR HTTP
-            # =================================================
+        except requests.exceptions.RequestException as error:
 
-            if not response.ok:
+            bot.edit_message_text(
+                "❌ <b>No se pudo conectar con la API de tokens.</b>\n\n"
+                f"<code>{html.escape(str(error))}</code>",
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=teclado_final(),
+                parse_mode="HTML"
+            )
 
-                respuesta_error = html.escape(
-                    response.text[:1500]
-                )
+            return
 
-                bot.edit_message_text(
-                    "❌ <b>| ERROR AL GENERAR TOKEN</b>\n\n"
+        # =================================================
+        # COMPROBAR RESPUESTA
+        # =================================================
 
-                    f"📡 Código ➣ "
-                    f"<code>{response.status_code}</code>\n\n"
+        if not respuesta_token.ok:
 
-                    "📝 Respuesta:\n"
-                    f"<code>{respuesta_error}</code>",
+            bot.edit_message_text(
+                "❌ <b>ERROR AL GENERAR TOKEN</b>\n\n"
+                f"📡 Código ➣ <code>{respuesta_token.status_code}</code>\n\n"
+                f"<code>{html.escape(respuesta_token.text[:1500])}</code>",
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=teclado_final(),
+                parse_mode="HTML"
+            )
 
-                    call.message.chat.id,
-                    call.message.message_id,
-                    parse_mode="HTML"
-                )
+            return
 
-                return
+        try:
+            data = respuesta_token.json()
+        except ValueError:
 
-            # =================================================
-            # LEER JSON
-            # =================================================
+            bot.edit_message_text(
+                "❌ <b>La API de tokens no devolvió JSON válido.</b>",
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=teclado_final(),
+                parse_mode="HTML"
+            )
 
-            try:
+            return
 
-                data = response.json()
+        # =================================================
+        # BUSCAR TOKEN
+        # =================================================
 
-            except ValueError:
+        token = (
+            data.get("token")
+            or data.get("key")
+            or data.get("license")
+            or data.get("licenseKey")
+        )
 
-                respuesta = html.escape(
-                    response.text[:1500]
-                )
-
-                bot.edit_message_text(
-                    "❌ <b>La API no devolvió JSON válido.</b>\n\n"
-                    f"<code>{respuesta}</code>",
-
-                    call.message.chat.id,
-                    call.message.message_id,
-                    parse_mode="HTML"
-                )
-
-                return
-
-            # =================================================
-            # BUSCAR TOKEN EN RESPUESTA
-            # =================================================
+        # Buscar dentro de data
+        if not token and isinstance(data.get("data"), dict):
 
             token = (
-                data.get("token")
-                or data.get("key")
-                or data.get("license")
-                or data.get("licenseKey")
+                data["data"].get("token")
+                or data["data"].get("key")
+                or data["data"].get("license")
+                or data["data"].get("licenseKey")
             )
 
-            # Algunas APIs meten el token dentro de data
-            if not token and isinstance(data.get("data"), dict):
-
-                token = (
-                    data["data"].get("token")
-                    or data["data"].get("key")
-                    or data["data"].get("license")
-                    or data["data"].get("licenseKey")
-                )
-
-            # =================================================
-            # SI NO ENCUENTRA TOKEN
-            # =================================================
-
-            if not token:
-
-                respuesta = html.escape(
-                    str(data)[:2000]
-                )
-
-                bot.edit_message_text(
-                    "⚠️ <b>| RESPUESTA DE LA API</b>\n\n"
-
-                    "La API respondió correctamente, "
-                    "pero no encontré el campo del token.\n\n"
-
-                    f"<code>{respuesta}</code>",
-
-                    call.message.chat.id,
-                    call.message.message_id,
-                    reply_markup=teclado_token_generado(),
-                    parse_mode="HTML"
-                )
-
-                return
-
-            # Escapar token para HTML
-            token_seguro = html.escape(str(token))
-
-            # =================================================
-            # MENSAJE FINAL
-            # =================================================
-
-            texto_final = (
-                "✨ <b>| YAPE AUTOCOMPLETADO</b>\n\n"
-
-                f"Token de autocompletado por "
-                f"<b>{dias} días</b> generado:\n\n"
-
-                f"<blockquote><code>{token_seguro}</code></blockquote>\n\n"
-
-                "📲 <b>| ¿CÓMO ACTIVARLO?</b>\n"
-                "1. Presiona el ícono de la personita 👤\n"
-                "2. Ingresa a Configuración\n"
-                "3. Busca el apartado \"Autocompletado\"\n"
-                "4. Pega el token y confirma la activación\n\n"
-
-                "⚡ <b>| IMPORTANTE</b>\n"
-                "- El token no tiene fecha de vencimiento.\n"
-                "- El token es válido para una única activación.\n"
-                f"- Duración del servicio: <b>{dias} días</b>."
-            )
+        if not token:
 
             bot.edit_message_text(
-                texto_final,
+                "❌ <b>La API respondió pero no encontré el token.</b>\n\n"
+                f"<code>{html.escape(str(data)[:1500])}</code>",
                 call.message.chat.id,
                 call.message.message_id,
-                reply_markup=teclado_token_generado(),
+                reply_markup=teclado_final(),
                 parse_mode="HTML"
             )
 
-        # =====================================================
-        # TIMEOUT
-        # =====================================================
+            return
 
-        except requests.exceptions.Timeout:
+        # =================================================
+        # PASO 2: DESCONTAR CRÉDITOS
+        # =================================================
 
-            bot.edit_message_text(
-                "❌ <b>La API tardó demasiado en responder.</b>\n\n"
-                "Intenta nuevamente.",
+        try:
 
-                call.message.chat.id,
-                call.message.message_id,
-                reply_markup=teclado_token_generado(),
-                parse_mode="HTML"
+            respuesta_creditos = requests.post(
+                API_DESCONTAR,
+                json={
+                    "telegramId": str(user_id),
+                    "amount": costo
+                },
+                timeout=15
             )
-
-        # =====================================================
-        # ERROR DE CONEXIÓN
-        # =====================================================
 
         except requests.exceptions.RequestException as error:
 
-            error_seguro = html.escape(str(error))
-
             bot.edit_message_text(
-                "❌ <b>Error de conexión con la API.</b>\n\n"
-                f"<code>{error_seguro}</code>",
-
+                "⚠️ <b>EL TOKEN FUE GENERADO</b>\n\n"
+                "Pero ocurrió un error al conectar con "
+                "la API de créditos.\n\n"
+                f"<code>{html.escape(str(error))}</code>",
                 call.message.chat.id,
                 call.message.message_id,
-                reply_markup=teclado_token_generado(),
                 parse_mode="HTML"
             )
 
-        # =====================================================
-        # OTRO ERROR
-        # =====================================================
+            return
 
-        except Exception as error:
+        # =================================================
+        # ERROR AL DESCONTAR
+        # =================================================
 
-            error_seguro = html.escape(str(error))
+        if not respuesta_creditos.ok:
+
+            try:
+
+                error_data = respuesta_creditos.json()
+
+                mensaje_error = (
+                    error_data.get("message")
+                    or error_data.get("error")
+                    or respuesta_creditos.text
+                )
+
+            except ValueError:
+
+                mensaje_error = respuesta_creditos.text
 
             bot.edit_message_text(
-                "❌ <b>Error inesperado.</b>\n\n"
-                f"<code>{error_seguro}</code>",
+                "❌ <b>NO SE PUDIERON DESCONTAR LOS CRÉDITOS</b>\n\n"
+
+                f"📅 Duración ➣ <b>{dias} días</b>\n"
+                f"💰 Costo ➣ <b>{costo} créditos</b>\n\n"
+
+                f"📝 {html.escape(str(mensaje_error))}\n\n"
+
+                "💳 Para comprar créditos usa /buy",
 
                 call.message.chat.id,
                 call.message.message_id,
-                reply_markup=teclado_token_generado(),
+                reply_markup=teclado_final(),
                 parse_mode="HTML"
             )
+
+            return
+
+        # =================================================
+        # TOKEN + CRÉDITOS OK
+        # =================================================
+
+        token_seguro = html.escape(str(token))
+
+        texto_final = (
+            "✨ <b>| YAPE AUTOCOMPLETADO</b>\n\n"
+
+            f"Token de autocompletado por "
+            f"<b>{dias} días</b> generado:\n\n"
+
+            f"<blockquote><code>{token_seguro}</code></blockquote>\n\n"
+
+            "📲 <b>| ¿CÓMO ACTIVARLO?</b>\n"
+            "1. Presiona el ícono de la personita 👤\n"
+            "2. Ingresa a Configuración\n"
+            "3. Busca el apartado \"Autocompletado\"\n"
+            "4. Pega el token y confirma la activación\n\n"
+
+            "⚡ <b>| IMPORTANTE</b>\n"
+            "- El token no tiene fecha de vencimiento.\n"
+            "- El token es válido para una única activación.\n"
+            f"- Duración del servicio: <b>{dias} días</b>.\n\n"
+
+            f"💰 Créditos usados ➣ <b>{costo}</b>"
+        )
+
+        bot.edit_message_text(
+            texto_final,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=teclado_final(),
+            parse_mode="HTML"
+        )
 
     # =====================================================
     # GENERAR OTRO
@@ -566,18 +499,16 @@ def registrar_token_yape(bot):
         bot.answer_callback_query(call.id)
 
     # =====================================================
-    # CANCELAR / CERRAR
+    # CANCELAR
     # =====================================================
 
     @bot.callback_query_handler(
         func=lambda call: call.data == "token_cancelar"
     )
-    def token_cancelar(call):
-
-        user_id = call.from_user.id
+    def cancelar(call):
 
         SELECCION_TOKEN.pop(
-            user_id,
+            call.from_user.id,
             None
         )
 
