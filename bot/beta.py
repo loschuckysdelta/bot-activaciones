@@ -2,6 +2,8 @@ import io
 import time
 import base64
 import requests
+import json
+import os
 from datetime import datetime
 from telebot import types
 
@@ -21,9 +23,77 @@ ADMIN_IDS = [8635600472]
 # 2. ALMACENAMIENTO EN MEMORIA
 # ========================================================
 
-GRUPOS_AUTORIZADOS = {}
+ARCHIVO_GRUPOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "grupos.json")
+
 COOLDOWN_ANTISPAM = {}
 USOS_USUARIOS_DIARIOS = {}
+
+def cargar_grupos():
+    if not os.path.exists(ARCHIVO_GRUPOS):
+        return {}
+    try:
+        with open(ARCHIVO_GRUPOS, "r", encoding="utf-8") as archivo:
+            datos = json.load(archivo)
+        return {int(group_id): info for group_id, info in datos.items()}
+    except Exception as e:
+        print(f"❌ Error cargando grupos.json: {e}")
+        return {}
+
+def guardar_grupos():
+    try:
+        with open(ARCHIVO_GRUPOS, "w", encoding="utf-8") as archivo:
+            json.dump(GRUPOS_AUTORIZADOS, archivo, indent=4, ensure_ascii=False)
+    except Exception as e:
+        print(f"❌ Error guardando grupos.json: {e}")
+
+GRUPOS_AUTORIZADOS = cargar_grupos()
+
+
+def convertir_antispam(valor):
+    """
+    Convierte el AntiSpam a segundos.
+
+    Formatos aceptados:
+      10   -> 10 segundos
+      30s  -> 30 segundos
+      1m   -> 60 segundos
+      2m   -> 120 segundos
+    """
+    valor = str(valor).strip().lower()
+
+    if valor.endswith("s"):
+        cantidad = int(valor[:-1])
+        segundos = cantidad
+    elif valor.endswith("m"):
+        cantidad = int(valor[:-1])
+        segundos = cantidad * 60
+    else:
+        segundos = int(valor)
+
+    if segundos < 0:
+        raise ValueError("AntiSpam negativo")
+
+    return segundos
+
+
+def texto_antispam(segundos):
+    segundos = int(segundos)
+
+    if segundos == 0:
+        return "0 segundos"
+
+    if segundos % 60 == 0:
+        minutos = segundos // 60
+        return f"{minutos} minuto" if minutos == 1 else f"{minutos} minutos"
+
+    if segundos >= 60:
+        minutos = segundos // 60
+        resto = segundos % 60
+        txt_min = f"{minutos} minuto" if minutos == 1 else f"{minutos} minutos"
+        txt_seg = f"{resto} segundo" if resto == 1 else f"{resto} segundos"
+        return f"{txt_min} {txt_seg}"
+
+    return f"{segundos} segundo" if segundos == 1 else f"{segundos} segundos"
 
 
 # ========================================================
@@ -184,7 +254,7 @@ def evaluar_permiso(chat_id, user_id):
 
             return False, (
                 "⚠️ <b>AntiSpam Activado</b>\n\n"
-                f"⏱ Espera <b>{tiempo_espera} segundos</b> "
+                f"⏱ Espera <b>{texto_antispam(tiempo_espera)}</b> "
                 "antes de realizar otra consulta."
             )
 
@@ -210,6 +280,8 @@ def evaluar_permiso(chat_id, user_id):
 
         datos_grupo["usos_hoy"] += 1
 
+        guardar_grupos()
+
         COOLDOWN_ANTISPAM[chat_id] = ahora
 
         restantes_grupo = (
@@ -223,7 +295,7 @@ def evaluar_permiso(chat_id, user_id):
             f"<b>{datos_grupo['usos_hoy']}/"
             f"{datos_grupo['limite_diario']}</b>\n"
             f"🔎 Restantes: <b>{restantes_grupo}</b>\n"
-            f"⏱ AntiSpam: <b>{anti_spam}s</b>"
+            f"⏱ AntiSpam: <b>{texto_antispam(anti_spam)}</b>"
         )
 
     # ====================================================
@@ -405,13 +477,17 @@ def registrar_beta(bot):
     # ====================================================
     # /addgrupo
     #
-    # EJEMPLO:
+    # EJEMPLOS:
     #
-    # /addgrupo -1001234567890 10 6
+    # /addgrupo -1001234567890 10 30s
+    # /addgrupo -1001234567890 10 1m
+    # /addgrupo -1001234567890 10 2m
     #
     # -1001234567890 = ID grupo
     # 10 = consultas diarias
-    # 6 = segundos AntiSpam
+    # 30s = 30 segundos
+    # 1m = 1 minuto
+    # 2m = 2 minutos
     # ====================================================
 
     @bot.message_handler(commands=["addgrupo"])
@@ -429,14 +505,14 @@ def registrar_beta(bot):
 
             group_id = int(partes[1])
             limite_diario = int(partes[2])
-            anti_spam = int(partes[3])
+            anti_spam = convertir_antispam(partes[3])
 
             if group_id >= 0:
                 bot.reply_to(
                     message,
                     "❌ El ID debe ser de un grupo.\n\n"
                     "Ejemplo:\n"
-                    "<code>/addgrupo -1001234567890 10 6</code>",
+                    "<code>/addgrupo -1001234567890 10 1m</code>",
                     parse_mode="HTML"
                 )
                 return
@@ -464,6 +540,8 @@ def registrar_beta(bot):
                 "fecha": datetime.now().strftime("%Y-%m-%d")
             }
 
+            guardar_grupos()
+
             bot.reply_to(
                 message,
                 "✅ <b>Grupo Autorizado</b>\n\n"
@@ -471,7 +549,7 @@ def registrar_beta(bot):
                 f"📊 Límite diario: "
                 f"<b>{limite_diario}</b> consultas\n"
                 f"⏱ AntiSpam: "
-                f"<b>{anti_spam} segundos</b>",
+                f"<b>{texto_antispam(anti_spam)}</b>",
                 parse_mode="HTML"
             )
 
@@ -481,10 +559,15 @@ def registrar_beta(bot):
                 message,
                 "⚠️ <b>Formato incorrecto</b>\n\n"
                 "<code>/addgrupo ID_GRUPO LIMITE ANTISPAM</code>\n\n"
-                "✅ Ejemplo:\n"
-                "<code>/addgrupo -1001234567890 10 6</code>\n\n"
+                "✅ Ejemplos:\n"
+                "<code>/addgrupo -1001234567890 10 30s</code>\n"
+                "<code>/addgrupo -1001234567890 10 1m</code>\n"
+                "<code>/addgrupo -1001234567890 10 2m</code>\n\n"
                 "📊 10 = consultas por día\n"
-                "⏱ 6 = segundos entre consultas",
+                "⏱ 30s = 30 segundos\n"
+                "⏱ 1m = 1 minuto\n"
+                "⏱ 2m = 2 minutos\n"
+                "ℹ️ Si pones solo 10, serán 10 segundos.",
                 parse_mode="HTML"
             )
 
@@ -507,6 +590,8 @@ def registrar_beta(bot):
             if group_id in GRUPOS_AUTORIZADOS:
 
                 del GRUPOS_AUTORIZADOS[group_id]
+
+                guardar_grupos()
 
                 # Limpiar también el cooldown
                 COOLDOWN_ANTISPAM.pop(
