@@ -25,6 +25,8 @@ ADMIN_IDS = [8635600472]
 
 ARCHIVO_GRUPOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "grupos.json")
 
+# Claves usadas en grupos: (chat_id, user_id) -> ultimo uso
+# Así el AntiSpam es independiente para cada persona.
 COOLDOWN_ANTISPAM = {}
 USOS_USUARIOS_DIARIOS = {}
 
@@ -34,7 +36,24 @@ def cargar_grupos():
     try:
         with open(ARCHIVO_GRUPOS, "r", encoding="utf-8") as archivo:
             datos = json.load(archivo)
-        return {int(group_id): info for group_id, info in datos.items()}
+
+        grupos = {}
+
+        for group_id, info in datos.items():
+            info = dict(info)
+
+            # Migración automática desde versiones anteriores:
+            # antes "usos_hoy" era un contador compartido por el grupo.
+            # Ahora cada usuario tiene su propio contador.
+            if "usuarios" not in info or not isinstance(info.get("usuarios"), dict):
+                info["usuarios"] = {}
+
+            info.pop("usos_hoy", None)
+            info.pop("fecha", None)
+
+            grupos[int(group_id)] = info
+
+        return grupos
     except Exception as e:
         print(f"❌ Error cargando grupos.json: {e}")
         return {}
@@ -212,7 +231,6 @@ def evaluar_permiso(chat_id, user_id):
         # -----------------------------------------------
 
         if chat_id not in GRUPOS_AUTORIZADOS:
-
             return False, (
                 "❌ <b>Grupo no autorizado</b>\n\n"
                 "Este grupo no está autorizado para usar el bot."
@@ -221,25 +239,55 @@ def evaluar_permiso(chat_id, user_id):
         datos_grupo = GRUPOS_AUTORIZADOS[chat_id]
 
         # -----------------------------------------------
-        # Reiniciar contador si cambió el día
+        # Configuración del grupo
         # -----------------------------------------------
 
-        if datos_grupo["fecha"] != fecha_hoy:
-
-            datos_grupo["fecha"] = fecha_hoy
-            datos_grupo["usos_hoy"] = 0
-
-        # -----------------------------------------------
-        # AntiSpam personalizado
-        # -----------------------------------------------
-
-        anti_spam = datos_grupo.get(
-            "anti_spam",
-            5
+        limite_diario = int(
+            datos_grupo.get("limite_diario", 3)
         )
 
+        anti_spam = int(
+            datos_grupo.get("anti_spam", 5)
+        )
+
+        # =================================================
+        # LÍMITE DIARIO POR PERSONA
+        #
+        # Cada usuario del grupo tiene su propio contador.
+        # Si Pedro consume 10/10, Juan sigue teniendo 10/10.
+        # =================================================
+
+        usuarios_grupo = datos_grupo.setdefault(
+            "usuarios",
+            {}
+        )
+
+        clave_usuario = str(user_id)
+
+        registro_usuario = usuarios_grupo.get(
+            clave_usuario,
+            {
+                "fecha": fecha_hoy,
+                "usos": 0
+            }
+        )
+
+        # Reiniciar solamente el contador de ESTA persona
+        # cuando cambie el día.
+        if registro_usuario.get("fecha") != fecha_hoy:
+            registro_usuario = {
+                "fecha": fecha_hoy,
+                "usos": 0
+            }
+
+        # -----------------------------------------------
+        # AntiSpam por persona
+        # -----------------------------------------------
+
+        clave_antispam = (chat_id, user_id)
+
         ultimo_uso = COOLDOWN_ANTISPAM.get(
-            chat_id,
+            clave_antispam,
             0
         )
 
@@ -259,43 +307,48 @@ def evaluar_permiso(chat_id, user_id):
             )
 
         # -----------------------------------------------
-        # Revisar límite diario
+        # Revisar límite diario de ESTA persona
         # -----------------------------------------------
 
-        if (
-            datos_grupo["usos_hoy"]
-            >= datos_grupo["limite_diario"]
-        ):
+        if registro_usuario["usos"] >= limite_diario:
+
+            usuarios_grupo[clave_usuario] = registro_usuario
+            guardar_grupos()
 
             return False, (
                 "⚠️ <b>Límite diario alcanzado</b>\n\n"
-                f"📊 Este grupo ya utilizó sus "
-                f"<b>{datos_grupo['limite_diario']} "
-                "consultas</b> de hoy."
+                f"📊 Ya utilizaste tus "
+                f"<b>{limite_diario} consultas</b> de hoy.\n\n"
+                "👥 Este límite es individual; "
+                "las demás personas del grupo pueden seguir consultando."
             )
 
         # -----------------------------------------------
-        # Registrar consulta
+        # Consumir una consulta solamente a ESTA persona
         # -----------------------------------------------
 
-        datos_grupo["usos_hoy"] += 1
+        registro_usuario["usos"] += 1
+
+        usuarios_grupo[clave_usuario] = registro_usuario
 
         guardar_grupos()
 
-        COOLDOWN_ANTISPAM[chat_id] = ahora
+        # Iniciar AntiSpam solamente para ESTA persona.
+        COOLDOWN_ANTISPAM[clave_antispam] = ahora
 
-        restantes_grupo = (
-            datos_grupo["limite_diario"]
-            - datos_grupo["usos_hoy"]
+        restantes_usuario = (
+            limite_diario
+            - registro_usuario["usos"]
         )
 
         return True, (
             "👥 <b>Grupo Autorizado</b>\n"
-            f"📊 Consultas: "
-            f"<b>{datos_grupo['usos_hoy']}/"
-            f"{datos_grupo['limite_diario']}</b>\n"
-            f"🔎 Restantes: <b>{restantes_grupo}</b>\n"
-            f"⏱ AntiSpam: <b>{texto_antispam(anti_spam)}</b>"
+            "👤 <b>Límite individual</b>\n"
+            f"📊 Tus consultas: "
+            f"<b>{registro_usuario['usos']}/{limite_diario}</b>\n"
+            f"🔎 Te quedan: <b>{restantes_usuario}</b>\n"
+            f"⏱ AntiSpam personal: "
+            f"<b>{texto_antispam(anti_spam)}</b>"
         )
 
     # ====================================================
@@ -484,7 +537,7 @@ def registrar_beta(bot):
     # /addgrupo -1001234567890 10 2m
     #
     # -1001234567890 = ID grupo
-    # 10 = consultas diarias
+    # 10 = consultas diarias POR PERSONA
     # 30s = 30 segundos
     # 1m = 1 minuto
     # 2m = 2 minutos
@@ -533,11 +586,20 @@ def registrar_beta(bot):
                 )
                 return
 
+            # Si el grupo ya existía, conservamos los contadores
+            # individuales de sus usuarios.
+            usuarios_existentes = {}
+
+            if group_id in GRUPOS_AUTORIZADOS:
+                usuarios_existentes = GRUPOS_AUTORIZADOS[group_id].get(
+                    "usuarios",
+                    {}
+                )
+
             GRUPOS_AUTORIZADOS[group_id] = {
                 "limite_diario": limite_diario,
                 "anti_spam": anti_spam,
-                "usos_hoy": 0,
-                "fecha": datetime.now().strftime("%Y-%m-%d")
+                "usuarios": usuarios_existentes
             }
 
             guardar_grupos()
@@ -546,7 +608,7 @@ def registrar_beta(bot):
                 message,
                 "✅ <b>Grupo Autorizado</b>\n\n"
                 f"🆔 ID: <code>{group_id}</code>\n"
-                f"📊 Límite diario: "
+                f"📊 Límite diario por persona: "
                 f"<b>{limite_diario}</b> consultas\n"
                 f"⏱ AntiSpam: "
                 f"<b>{texto_antispam(anti_spam)}</b>",
@@ -563,7 +625,7 @@ def registrar_beta(bot):
                 "<code>/addgrupo -1001234567890 10 30s</code>\n"
                 "<code>/addgrupo -1001234567890 10 1m</code>\n"
                 "<code>/addgrupo -1001234567890 10 2m</code>\n\n"
-                "📊 10 = consultas por día\n"
+                "📊 10 = consultas por día para cada persona\n"
                 "⏱ 30s = 30 segundos\n"
                 "⏱ 1m = 1 minuto\n"
                 "⏱ 2m = 2 minutos\n"
@@ -593,11 +655,17 @@ def registrar_beta(bot):
 
                 guardar_grupos()
 
-                # Limpiar también el cooldown
-                COOLDOWN_ANTISPAM.pop(
-                    group_id,
-                    None
-                )
+                # Limpiar el AntiSpam de todas las personas de ese grupo
+                claves_a_borrar = [
+                    clave
+                    for clave in COOLDOWN_ANTISPAM
+                    if isinstance(clave, tuple)
+                    and len(clave) == 2
+                    and clave[0] == group_id
+                ]
+
+                for clave in claves_a_borrar:
+                    COOLDOWN_ANTISPAM.pop(clave, None)
 
                 bot.reply_to(
                     message,
