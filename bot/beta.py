@@ -27,8 +27,19 @@ ARCHIVO_GRUPOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "grupo
 
 # Claves usadas en grupos: (chat_id, user_id) -> ultimo uso
 # Así el AntiSpam es independiente para cada persona.
-COOLDOWN_ANTISPAM = {}
+# AntiSpam separado para evitar que una persona bloquee a las demás.
+# Formato grupos:
+# COOLDOWN_GRUPOS[chat_id][user_id] = timestamp
+COOLDOWN_GRUPOS = {}
+
+# Chat privado:
+# COOLDOWN_PRIVADO[user_id] = timestamp
+COOLDOWN_PRIVADO = {}
+
 USOS_USUARIOS_DIARIOS = {}
+
+# Confirmaciones temporales para /resetdb
+RESET_DB_CONFIRMACIONES = {}
 
 def cargar_grupos():
     if not os.path.exists(ARCHIVO_GRUPOS):
@@ -221,14 +232,10 @@ def evaluar_permiso(chat_id, user_id):
     ahora = time.time()
 
     # ====================================================
-    # A. SI EL COMANDO VIENE DE UN GRUPO
+    # A. GRUPO
     # ====================================================
 
     if chat_id < 0:
-
-        # -----------------------------------------------
-        # Verificar grupo autorizado
-        # -----------------------------------------------
 
         if chat_id not in GRUPOS_AUTORIZADOS:
             return False, (
@@ -238,10 +245,6 @@ def evaluar_permiso(chat_id, user_id):
 
         datos_grupo = GRUPOS_AUTORIZADOS[chat_id]
 
-        # -----------------------------------------------
-        # Configuración del grupo
-        # -----------------------------------------------
-
         limite_diario = int(
             datos_grupo.get("limite_diario", 3)
         )
@@ -250,12 +253,9 @@ def evaluar_permiso(chat_id, user_id):
             datos_grupo.get("anti_spam", 5)
         )
 
-        # =================================================
-        # LÍMITE DIARIO POR PERSONA
-        #
-        # Cada usuario del grupo tiene su propio contador.
-        # Si Pedro consume 10/10, Juan sigue teniendo 10/10.
-        # =================================================
+        # ------------------------------------------------
+        # CONTADOR DIARIO POR PERSONA
+        # ------------------------------------------------
 
         usuarios_grupo = datos_grupo.setdefault(
             "usuarios",
@@ -272,22 +272,26 @@ def evaluar_permiso(chat_id, user_id):
             }
         )
 
-        # Reiniciar solamente el contador de ESTA persona
-        # cuando cambie el día.
         if registro_usuario.get("fecha") != fecha_hoy:
             registro_usuario = {
                 "fecha": fecha_hoy,
                 "usos": 0
             }
 
-        # -----------------------------------------------
-        # AntiSpam por persona
-        # -----------------------------------------------
+        # ------------------------------------------------
+        # ANTISPAM POR PERSONA
+        #
+        # Cada grupo tiene un diccionario y dentro de él
+        # cada Telegram user_id tiene su propio tiempo.
+        # ------------------------------------------------
 
-        clave_antispam = (chat_id, user_id)
+        cooldown_del_grupo = COOLDOWN_GRUPOS.setdefault(
+            chat_id,
+            {}
+        )
 
-        ultimo_uso = COOLDOWN_ANTISPAM.get(
-            clave_antispam,
+        ultimo_uso = cooldown_del_grupo.get(
+            user_id,
             0
         )
 
@@ -301,14 +305,17 @@ def evaluar_permiso(chat_id, user_id):
             )
 
             return False, (
-                "⚠️ <b>AntiSpam Activado</b>\n\n"
-                f"⏱ Espera <b>{texto_antispam(tiempo_espera)}</b> "
-                "antes de realizar otra consulta."
+                "⚠️ <b>AntiSpam personal activado</b>\n\n"
+                f"👤 Tu ID: <code>{user_id}</code>\n"
+                f"⏱ Tú debes esperar "
+                f"<b>{texto_antispam(tiempo_espera)}</b>.\n\n"
+                "✅ Las demás personas del grupo "
+                "pueden seguir consultando normalmente."
             )
 
-        # -----------------------------------------------
-        # Revisar límite diario de ESTA persona
-        # -----------------------------------------------
+        # ------------------------------------------------
+        # LÍMITE DIARIO SOLO DE ESTA PERSONA
+        # ------------------------------------------------
 
         if registro_usuario["usos"] >= limite_diario:
 
@@ -316,47 +323,47 @@ def evaluar_permiso(chat_id, user_id):
             guardar_grupos()
 
             return False, (
-                "⚠️ <b>Límite diario alcanzado</b>\n\n"
-                f"📊 Ya utilizaste tus "
-                f"<b>{limite_diario} consultas</b> de hoy.\n\n"
-                "👥 Este límite es individual; "
-                "las demás personas del grupo pueden seguir consultando."
+                "⚠️ <b>Tu límite diario fue alcanzado</b>\n\n"
+                f"👤 Tu ID: <code>{user_id}</code>\n"
+                f"📊 Usaste <b>{limite_diario}/"
+                f"{limite_diario}</b> consultas.\n\n"
+                "✅ Las demás personas del grupo "
+                "conservan sus propios límites."
             )
 
-        # -----------------------------------------------
-        # Consumir una consulta solamente a ESTA persona
-        # -----------------------------------------------
+        # ------------------------------------------------
+        # CONSUMIR 1 CONSULTA SOLO A ESTA PERSONA
+        # ------------------------------------------------
 
         registro_usuario["usos"] += 1
-
         usuarios_grupo[clave_usuario] = registro_usuario
 
         guardar_grupos()
 
-        # Iniciar AntiSpam solamente para ESTA persona.
-        COOLDOWN_ANTISPAM[clave_antispam] = ahora
+        # Inicia el AntiSpam SOLO para este user_id.
+        cooldown_del_grupo[user_id] = ahora
 
         restantes_usuario = (
-            limite_diario
-            - registro_usuario["usos"]
+            limite_diario - registro_usuario["usos"]
         )
 
         return True, (
-            "👥 <b>Grupo Autorizado</b>\n"
-            "👤 <b>Límite individual</b>\n"
+            "👥 <b>Grupo autorizado</b>\n"
+            f"👤 Usuario: <code>{user_id}</code>\n"
             f"📊 Tus consultas: "
-            f"<b>{registro_usuario['usos']}/{limite_diario}</b>\n"
+            f"<b>{registro_usuario['usos']}/"
+            f"{limite_diario}</b>\n"
             f"🔎 Te quedan: <b>{restantes_usuario}</b>\n"
-            f"⏱ AntiSpam personal: "
+            f"⏱ Tu AntiSpam: "
             f"<b>{texto_antispam(anti_spam)}</b>"
         )
 
     # ====================================================
-    # B. CHAT PRIVADO - ANTISPAM DE 5 SEGUNDOS
+    # B. CHAT PRIVADO
     # ====================================================
 
-    ultimo_uso = COOLDOWN_ANTISPAM.get(
-        chat_id,
+    ultimo_uso = COOLDOWN_PRIVADO.get(
+        user_id,
         0
     )
 
@@ -375,31 +382,19 @@ def evaluar_permiso(chat_id, user_id):
             "de enviar otro comando."
         )
 
-    # ====================================================
-    # C. CONSULTAR DÍAS DEL USUARIO
-    # ====================================================
-
     tiene_dias, cantidad_dias = consultar_dias_api(
         user_id
     )
 
-    # ====================================================
-    # D. TIENE DÍAS = CONSULTAS ILIMITADAS
-    # ====================================================
-
     if tiene_dias:
 
-        COOLDOWN_ANTISPAM[chat_id] = ahora
+        COOLDOWN_PRIVADO[user_id] = ahora
 
         return True, (
             "🌟 <b>Plan con días activo</b>\n"
             f"📅 Días restantes: <b>{cantidad_dias}</b>\n"
             "♾️ Consultas: <b>Ilimitadas</b>"
         )
-
-    # ====================================================
-    # E. NO TIENE DÍAS = PLAN GRATUITO
-    # ====================================================
 
     registro = USOS_USUARIOS_DIARIOS.get(
         user_id,
@@ -409,20 +404,11 @@ def evaluar_permiso(chat_id, user_id):
         }
     )
 
-    # -----------------------------------------------
-    # Reiniciar las 3 consultas al cambiar de día
-    # -----------------------------------------------
-
     if registro["fecha"] != fecha_hoy:
-
         registro = {
             "fecha": fecha_hoy,
             "usos": 0
         }
-
-    # -----------------------------------------------
-    # Ya gastó las 3 consultas
-    # -----------------------------------------------
 
     if registro["usos"] >= 3:
 
@@ -437,15 +423,10 @@ def evaluar_permiso(chat_id, user_id):
             "consultas ilimitadas."
         )
 
-    # -----------------------------------------------
-    # Consumir una consulta
-    # -----------------------------------------------
-
     registro["usos"] += 1
-
     USOS_USUARIOS_DIARIOS[user_id] = registro
 
-    COOLDOWN_ANTISPAM[chat_id] = ahora
+    COOLDOWN_PRIVADO[user_id] = ahora
 
     usos_restantes = 3 - registro["usos"]
 
@@ -526,6 +507,185 @@ def solicitar_voucher_api(endpoint, payload):
 # ========================================================
 
 def registrar_beta(bot):
+
+    # ====================================================
+    # /resetdb
+    #
+    # SOLO ADMIN.
+    # Primer paso:
+    #   /resetdb
+    #
+    # Confirmación:
+    #   /resetdb confirmar
+    #
+    # Borra:
+    # - grupos_autorizados.json
+    # - contadores diarios por persona
+    # - AntiSpam de grupos
+    # - AntiSpam privado
+    # - usos gratuitos diarios en memoria
+    # ====================================================
+
+    @bot.message_handler(commands=["resetdb"])
+    def resetear_base_datos(message):
+
+        admin_id = message.from_user.id
+
+        if admin_id not in ADMIN_IDS:
+            bot.reply_to(
+                message,
+                "❌ <b>No tienes permiso para usar este comando.</b>",
+                parse_mode="HTML"
+            )
+            return
+
+        partes = message.text.strip().split(maxsplit=1)
+
+        # -----------------------------------------------
+        # PASO 1: PEDIR CONFIRMACIÓN
+        # -----------------------------------------------
+
+        if len(partes) == 1:
+
+            RESET_DB_CONFIRMACIONES[admin_id] = time.time()
+
+            bot.reply_to(
+                message,
+                "⚠️ <b>CONFIRMAR BORRADO TOTAL</b>\n\n"
+                "Este comando eliminará:\n"
+                "• Todos los grupos autorizados\n"
+                "• Todos los contadores por persona\n"
+                "• Todos los AntiSpam\n"
+                "• Todos los usos diarios guardados\n\n"
+                "Para confirmar escribe dentro de 60 segundos:\n\n"
+                "<code>/resetdb confirmar</code>",
+                parse_mode="HTML"
+            )
+            return
+
+        # -----------------------------------------------
+        # PASO 2: VALIDAR CONFIRMACIÓN
+        # -----------------------------------------------
+
+        confirmacion = partes[1].strip().lower()
+
+        if confirmacion != "confirmar":
+            bot.reply_to(
+                message,
+                "⚠️ Confirmación inválida.\n\n"
+                "Usa:\n"
+                "<code>/resetdb confirmar</code>",
+                parse_mode="HTML"
+            )
+            return
+
+        tiempo_confirmacion = RESET_DB_CONFIRMACIONES.get(
+            admin_id,
+            0
+        )
+
+        if not tiempo_confirmacion:
+            bot.reply_to(
+                message,
+                "⚠️ Primero debes usar <code>/resetdb</code>.",
+                parse_mode="HTML"
+            )
+            return
+
+        if time.time() - tiempo_confirmacion > 60:
+
+            RESET_DB_CONFIRMACIONES.pop(admin_id, None)
+
+            bot.reply_to(
+                message,
+                "⌛ La confirmación expiró.\n\n"
+                "Vuelve a usar <code>/resetdb</code>.",
+                parse_mode="HTML"
+            )
+            return
+
+        # -----------------------------------------------
+        # BORRAR TODO
+        # -----------------------------------------------
+
+        try:
+            GRUPOS_AUTORIZADOS.clear()
+            COOLDOWN_GRUPOS.clear()
+            COOLDOWN_PRIVADO.clear()
+            USOS_USUARIOS_DIARIOS.clear()
+
+            # Sobrescribir el JSON con un objeto vacío.
+            with open(
+                ARCHIVO_GRUPOS,
+                "w",
+                encoding="utf-8"
+            ) as archivo:
+                json.dump(
+                    {},
+                    archivo,
+                    indent=4,
+                    ensure_ascii=False
+                )
+
+            RESET_DB_CONFIRMACIONES.pop(admin_id, None)
+
+            bot.reply_to(
+                message,
+                "✅ <b>Base de datos reiniciada completamente.</b>\n\n"
+                "🗑️ Grupos autorizados: borrados\n"
+                "🗑️ Contadores por persona: borrados\n"
+                "🗑️ AntiSpam: borrado\n"
+                "🗑️ Usos diarios: borrados\n\n"
+                "El archivo "
+                f"<code>{ARCHIVO_GRUPOS}</code> "
+                "quedó vacío.",
+                parse_mode="HTML"
+            )
+
+        except Exception as e:
+
+            bot.reply_to(
+                message,
+                "❌ <b>Error al reiniciar la base de datos.</b>\n\n"
+                f"<code>{str(e)}</code>",
+                parse_mode="HTML"
+            )
+
+    # ====================================================
+    # /miid
+    # Sirve para comprobar que Telegram realmente está
+    # entregando un ID distinto para cada persona.
+    # ====================================================
+
+    @bot.message_handler(commands=["miid"])
+    def ver_mi_id(message):
+
+        sender_chat = getattr(message, "sender_chat", None)
+
+        # Cuando un administrador publica de forma anónima,
+        # Telegram no entrega su identidad personal real.
+        if sender_chat is not None:
+            bot.reply_to(
+                message,
+                "⚠️ <b>Estás enviando como anónimo o como el grupo.</b>\n\n"
+                "Telegram no permite distinguir qué administrador "
+                "real envió el mensaje.\n\n"
+                "Desactiva <b>Ser anónimo</b> / "
+                "<b>Permanecer anónimo</b> y vuelve a probar.\n\n"
+                f"📣 sender_chat: <code>{sender_chat.id}</code>",
+                parse_mode="HTML"
+            )
+            return
+
+        bot.reply_to(
+            message,
+            "✅ <b>Identidad detectada</b>\n\n"
+            f"👤 Telegram ID: <code>{message.from_user.id}</code>\n"
+            f"👥 Chat ID: <code>{message.chat.id}</code>\n\n"
+            "Cada persona normal del grupo debe mostrar "
+            "un Telegram ID diferente.",
+            parse_mode="HTML"
+        )
 
     # ====================================================
     # /addgrupo
@@ -655,17 +815,9 @@ def registrar_beta(bot):
 
                 guardar_grupos()
 
-                # Limpiar el AntiSpam de todas las personas de ese grupo
-                claves_a_borrar = [
-                    clave
-                    for clave in COOLDOWN_ANTISPAM
-                    if isinstance(clave, tuple)
-                    and len(clave) == 2
-                    and clave[0] == group_id
-                ]
-
-                for clave in claves_a_borrar:
-                    COOLDOWN_ANTISPAM.pop(clave, None)
+                # Eliminar todos los AntiSpam individuales
+                # pertenecientes únicamente a este grupo.
+                COOLDOWN_GRUPOS.pop(group_id, None)
 
                 bot.reply_to(
                     message,
@@ -710,6 +862,27 @@ def registrar_beta(bot):
     def gestor_vouchers_general(message):
 
         chat_id = message.chat.id
+
+        # IMPORTANTE:
+        # Si el mensaje fue enviado como administrador anónimo
+        # o "como el grupo", Telegram NO revela qué persona real
+        # lo mandó. En ese caso no es posible aplicar un AntiSpam
+        # individual correctamente.
+        sender_chat = getattr(message, "sender_chat", None)
+
+        if chat_id < 0 and sender_chat is not None:
+            bot.reply_to(
+                message,
+                "⚠️ <b>No puedo identificarte individualmente.</b>\n\n"
+                "Estás enviando el comando como "
+                "<b>administrador anónimo</b> o como el grupo.\n\n"
+                "Para que el límite y el AntiSpam sean por persona, "
+                "envía el comando con tu perfil personal "
+                "(desactiva <b>Ser anónimo</b>).",
+                parse_mode="HTML"
+            )
+            return
+
         user_id = message.from_user.id
 
         comando = (
