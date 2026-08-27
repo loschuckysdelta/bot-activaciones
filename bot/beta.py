@@ -23,7 +23,7 @@ ADMIN_IDS = [8635600472]
 # 2. ALMACENAMIENTO EN MEMORIA
 # ========================================================
 
-ARCHIVO_GRUPOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "grupos.json")
+ARCHIVO_GRUPOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "grupos_autorizados.json")
 
 # Claves usadas en grupos: (chat_id, user_id) -> ultimo uso
 # Así el AntiSpam es independiente para cada persona.
@@ -55,7 +55,7 @@ def cargar_grupos():
 
         return grupos
     except Exception as e:
-        print(f"❌ Error cargando grupos.json: {e}")
+        print(f"❌ Error cargando grupos_autorizados.json: {e}")
         return {}
 
 def guardar_grupos():
@@ -63,7 +63,7 @@ def guardar_grupos():
         with open(ARCHIVO_GRUPOS, "w", encoding="utf-8") as archivo:
             json.dump(GRUPOS_AUTORIZADOS, archivo, indent=4, ensure_ascii=False)
     except Exception as e:
-        print(f"❌ Error guardando grupos.json: {e}")
+        print(f"❌ Error guardando grupos_autorizados.json: {e}")
 
 GRUPOS_AUTORIZADOS = cargar_grupos()
 
