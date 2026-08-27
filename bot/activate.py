@@ -30,7 +30,7 @@ API_DEDUCT_CREDITS = f"{API_PANEL}/api/deduct_credits"
 # PRECIOS
 # =========================================================
 
-PRECIO_YAPE = 15
+PRECIO_YAPE = 25
 PRECIO_BCP = 7
 PRECIO_IBK = 7
 PRECIO_BBVA = 7

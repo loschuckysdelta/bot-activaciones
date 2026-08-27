@@ -1,5 +1,4 @@
 import telebot
-
 from bot.start import registrar_start
 from bot.register import registrar_register
 from bot.me import registrar_me
@@ -8,12 +7,14 @@ from bot.cmds import registrar_cmds
 from bot.buy import registrar_buy
 from bot.dar import registrar_dar
 from bot.beta import registrar_beta
+from bot.token_yape import registrar_token_yape
 
 
 # =========================
 # CONFIGURACIÓN DEL BOT
 # =========================
 
+# Pon aquí el NUEVO token generado con BotFather
 TOKEN = "8792179780:AAEWRReycQpJKfVNMYp-rJYX3x2G9kuAhks"
 
 bot = telebot.TeleBot(
@@ -34,6 +35,7 @@ registrar_cmds(bot)
 registrar_buy(bot)
 registrar_dar(bot)
 registrar_beta(bot)
+registrar_token_yape(bot)
 
 
 # =========================

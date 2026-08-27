@@ -912,20 +912,18 @@ def registrar_beta(bot):
         if len(partes_comando) == 1:
 
             mensaje_ayuda = (
-                f"⚠️ <b>Formato incorrecto.</b>\n"
-                f"Uso: "
+                f"⚠️ <b>Formato incorrecto.</b>\n\n"
+                f"Uso:\n"
                 f"<code>/{comando} "
                 "monto|titular|3 dígitos|mensaje|destino"
                 "</code>\n\n"
-
-                "✅ <b>Ejemplo de uso:</b>\n"
-
-                f"<code>/{comando} 150|Pedro Castillo\n"
+                "✅ <b>Ejemplo de uso:</b>\n\n"
+                "<pre>"
+                f"/{comando} 150|Pedro Castillo\n"
                 f"/{comando} 150|Pedro Castillo|999\n"
-                f"/{comando} 150|Pedro Castillo|999|"
-                "Pago realizado\n"
-                f"/{comando} 150|Pedro Castillo|999|"
-                "Pago realizado|Plin</code>"
+                f"/{comando} 150|Pedro Castillo|999|Pago realizado\n"
+                f"/{comando} 150|Pedro Castillo|999|Pago realizado|Plin"
+                "</pre>"
             )
 
             bot.reply_to(

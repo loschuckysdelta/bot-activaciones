@@ -7,7 +7,7 @@ def registrar_buy(bot):
 
     @bot.message_handler(commands=["buy", "comprar", "precios"])
     def buy(message):
-        imagen_url = "https://i.postimg.cc/NjKPzxvX/image.png"
+        imagen_url = "https://i.postimg.cc/zBjFynjv/image.png"
 
         texto = (
             "💳 <b>TARIFARIO DE CRÉDITOS</b>\n"
