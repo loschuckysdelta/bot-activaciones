@@ -169,8 +169,12 @@ def obtener_licencias(datos):
 
     return {
 
+        # IMPORTANTE:
+        # status = estado general de la cuenta
+        # payment = licencia Yape comprada/activada
+        # El backend actual no devuelve un campo "yape", por eso Yape se lee desde payment.
         "yape": bool(
-            datos.get("status", False)
+            datos.get("payment", False)
         ),
 
         "bcp": bool(
@@ -655,18 +659,20 @@ def registrar_activate(bot):
             return
 
         licencias = sesion["licencias"]
+        original = sesion["original"]
 
-        if banco == "yape":
-            licencias["yape"] = not licencias["yape"]
+        # Si la licencia YA estaba comprada cuando se abrió el panel,
+        # queda marcada y no se puede volver a seleccionar ni cobrar.
+        if original.get(banco, False):
+            bot.answer_callback_query(
+                call.id,
+                "✅ Esta licencia ya está comprada.",
+                show_alert=True
+            )
+            return
 
-        elif banco == "bcp":
-            licencias["bcp"] = not licencias["bcp"]
-
-        elif banco == "ibk":
-            licencias["ibk"] = not licencias["ibk"]
-
-        elif banco == "bbva":
-            licencias["bbva"] = not licencias["bbva"]
+        # Solo las licencias que estaban en blanco pueden marcarse/desmarcarse.
+        licencias[banco] = not licencias[banco]
 
         precio = calcular_precio(
             sesion["original"],
@@ -749,9 +755,32 @@ def registrar_activate(bot):
 
         licencias = sesion["licencias"]
 
+        # Revalidar el estado REAL justo antes de comprar.
+        # Esto evita cobrar otra vez si la licencia ya fue activada/comprada
+        # después de abrir el menú.
+        consulta_previa = consultar_usuario_yape(correo)
+
+        if not consulta_previa["ok"]:
+            bot.answer_callback_query(
+                call.id,
+                "⚠️ No pude verificar el estado actual de las licencias.",
+                show_alert=True
+            )
+            return
+
+        original_actual = obtener_licencias(consulta_previa["datos"])
+
+        # Mantener activas las que ya existen y sumar SOLO lo seleccionado.
+        seleccion_final = {
+            "yape": original_actual["yape"] or licencias["yape"],
+            "bcp": original_actual["bcp"] or licencias["bcp"],
+            "ibk": original_actual["ibk"] or licencias["ibk"],
+            "bbva": original_actual["bbva"] or licencias["bbva"],
+        }
+
         precio = calcular_precio(
-            original,
-            licencias
+            original_actual,
+            seleccion_final
         )
 
         if precio <= 0:
@@ -811,10 +840,10 @@ def registrar_activate(bot):
 
             payload = {
                 "payment": True,
-                "yape": licencias["yape"],
-                "bcp": licencias["bcp"],
-                "ibk": licencias["ibk"],
-                "bbva": licencias["bbva"]
+                "yape": seleccion_final["yape"],
+                "bcp": seleccion_final["bcp"],
+                "ibk": seleccion_final["ibk"],
+                "bbva": seleccion_final["bbva"]
             }
 
             respuesta = http.post(
@@ -853,35 +882,55 @@ def registrar_activate(bot):
             return
 
         # =================================================
-        # DESCONTAR CRÉDITOS
+        # VERIFICAR QUE LA API REALMENTE GUARDÓ LA COMPRA
+        # ANTES DE DESCONTAR CRÉDITOS
         # =================================================
-
-        descuento_ok = descontar_creditos(
-            telegram_id,
-            precio
-        )
-
-        if not descuento_ok:
-
-            bot.answer_callback_query(
-                call.id,
-                "⚠️ Error descontando créditos.",
-                show_alert=True
-            )
-
-            return
 
         consulta_actualizada = consultar_usuario_yape(correo)
 
-        if consulta_actualizada["ok"]:
-
-            nuevas_reales = obtener_licencias(
-                consulta_actualizada["datos"]
+        if not consulta_actualizada["ok"]:
+            bot.answer_callback_query(
+                call.id,
+                "⚠️ Se activó la solicitud, pero no pude verificarla. No se descontaron créditos.",
+                show_alert=True
             )
+            return
 
-        else:
+        nuevas_reales = obtener_licencias(consulta_actualizada["datos"])
 
-            nuevas_reales = licencias.copy()
+        # Solo exigimos que estén activas las licencias NUEVAS que se van a cobrar.
+        nuevas_seleccionadas = {
+            banco: (seleccion_final[banco] and not original[banco])
+            for banco in ("yape", "bcp", "ibk", "bbva")
+        }
+
+        no_guardadas = [
+            banco.upper()
+            for banco, es_nueva in nuevas_seleccionadas.items()
+            if es_nueva and not nuevas_reales.get(banco, False)
+        ]
+
+        if no_guardadas:
+            bot.answer_callback_query(
+                call.id,
+                "⚠️ La API no confirmó: " + ", ".join(no_guardadas) + ". No se descontaron créditos.",
+                show_alert=True
+            )
+            return
+
+        # =================================================
+        # DESCONTAR CRÉDITOS SOLO DESPUÉS DE CONFIRMAR
+        # =================================================
+
+        descuento_ok = descontar_creditos(telegram_id, precio)
+
+        if not descuento_ok:
+            bot.answer_callback_query(
+                call.id,
+                "⚠️ La licencia quedó activa, pero falló el descuento de créditos.",
+                show_alert=True
+            )
+            return
 
         nuevos_creditos = creditos - precio
 
