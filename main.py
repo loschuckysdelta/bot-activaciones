@@ -15,7 +15,7 @@ from bot.token_yape import registrar_token_yape
 # =========================
 
 # Pon aquí el NUEVO token generado con BotFather
-TOKEN = "8792179780:AAG119gTx5Niqzr1YFMMLiZVNqre3V09Xd4"
+TOKEN = "8792179780:AAGVXCW6B9F4CmU-NIVDxwMCN6rhw8GvGiw"
 
 bot = telebot.TeleBot(
     TOKEN,
