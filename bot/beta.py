@@ -8,7 +8,8 @@ from telebot import types
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ARCHIVO_GRUPOS = os.path.join(BASE_DIR, "grupos_autorizados.json")
-RUTA_VIDEO = os.path.join(BASE_DIR, "video.mp4")
+URL_IMAGEN_PROMO = "https://i.postimg.cc/4d7GwtKG/image.png"
+LINK_DESCARGA = "https://ypfkplus.com/"  # Destino del botón DESCARGAR GRATIS
 ADMIN_IDS = [8635600472]  # Reemplaza o amplía con los ID de administradores.
 LINK_ADMIN = "https://t.me/tuchuckynet_x"
 URL_ACTIVACIONES = "https://activaciones.vercel.app/api"
@@ -112,7 +113,7 @@ def evaluar_permiso(chat_id, user_id):
                 "⚠️ <b>¡Tus consultas se agotaron!</b>\n\n"
                 f"👤 Tu ID: <code>{user_id}</code>\n"
                 f"📊 Usaste <b>{registro['usos']}/{limite}</b> consultas.\n\n"
-                "🎬 Mira el video para obtener más información.\n\n"
+                "📸 Consulta la oferta especial a continuación.\n\n"
                 "📱 <b>¿Deseas comprar la APP?</b>\n"
                 "✅ Contacta al administrador.\n\n"
                 "👥 Las demás personas del grupo conservan sus consultas."
@@ -148,7 +149,7 @@ def evaluar_permiso(chat_id, user_id):
             "⚠️ <b>¡Tus consultas se agotaron!</b>\n\n"
             f"👤 Tu ID: <code>{user_id}</code>\n"
             "📊 Usaste <b>3/3</b> consultas gratuitas.\n\n"
-            "🎬 Mira el video para obtener más información.\n\n"
+            "📸 Consulta la oferta especial a continuación.\n\n"
             "📱 <b>¿Deseas comprar la APP?</b>\n"
             "✅ Contacta al administrador o vuelve mañana."
         ), "limite_agotado"
@@ -164,23 +165,46 @@ def evaluar_permiso(chat_id, user_id):
 
 
 def enviar_limite_alcanzado(bot, message, texto):
+    """Envía el aviso de límite con imagen promocional y botones."""
     botones = types.InlineKeyboardMarkup()
     botones.add(types.InlineKeyboardButton(
         "📲 CONTACTAR AL ADMINISTRADOR", url=LINK_ADMIN
     ))
+    if LINK_DESCARGA:
+        botones.add(types.InlineKeyboardButton(
+            "⬇️ DESCARGAR GRATIS", url=LINK_DESCARGA
+        ))
+
+    promocion = (
+        "🇵🇪 <b>¡OFERTA ESPECIAL!</b> 🇵🇪\n\n"
+        "🔥 Solo por <b>S/ xxx</b>\n\n"
+        "<b>¿Qué incluye?</b>\n\n"
+        "✅ Saldo ilimitado\n"
+        "✅ Notificaciones en tiempo real\n"
+        "✅ Constancias por Gmail\n"
+        "✅ Autocompletado OSIPTEL\n"
+        "✅ Escáner QR con Inteligencia Artificial\n"
+        "✅ Actualizaciones automáticas\n"
+        "✅ Licencia permanente\n\n"
+        "⬇️ <b>DESCARGAR GRATIS</b>\n"
+        "https://ypfkplus.com/"
+    )
+    mensaje = texto + "\n\n" + promocion
     kwargs = {
         "parse_mode": "HTML",
         "reply_markup": botones,
         "reply_to_message_id": message.message_id,
     }
-    if os.path.isfile(RUTA_VIDEO):
-        try:
-            with open(RUTA_VIDEO, "rb") as video:
-                bot.send_video(message.chat.id, video, caption=texto, **kwargs)
-            return
-        except Exception as exc:
-            print(f"No se pudo enviar video.mp4: {exc}")
-    bot.send_message(message.chat.id, texto, **kwargs)
+    try:
+        bot.send_photo(
+            message.chat.id,
+            photo=URL_IMAGEN_PROMO,
+            caption=mensaje,
+            **kwargs,
+        )
+    except Exception as exc:
+        print(f"No se pudo enviar la imagen promocional: {exc}")
+        bot.send_message(message.chat.id, mensaje, **kwargs)
 
 
 def registrar_beta(bot):
@@ -271,3 +295,4 @@ def registrar_beta(bot):
             return
         # Solo ejemplo de límites y mensajería: NO produce comprobantes de pago.
         bot.reply_to(message, "✅ <b>Consulta de demostración registrada.</b>\n" + texto + "\n\nℹ️ No se ha efectuado ni certificado ningún pago.", parse_mode="HTML")
+
