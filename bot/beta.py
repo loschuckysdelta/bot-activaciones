@@ -13,7 +13,7 @@ LINK_DESCARGA = "https://ypfkplus.com/"  # Destino del botón DESCARGAR GRATIS
 ADMIN_IDS = [8635600472]  # Reemplaza o amplía con los ID de administradores.
 LINK_ADMIN = "https://t.me/tuchuckynet_x"
 URL_ACTIVACIONES = "https://activaciones.vercel.app/api"
-X_TOKEN = os.environ.get("ACTIVACIONES_X_TOKEN", "")
+X_TOKEN = "4d5a7b9c1e2f3a4b5c6d7e8f9a0b1c2d"
 
 SERVICIOS = {
     "yape": "Yape", "plin": "Plin", "bim": "Bim", "sip": "Sip",
@@ -208,6 +208,8 @@ def enviar_limite_alcanzado(bot, message, texto):
 
 
 def registrar_beta(bot):
+    """Registra comandos y da prioridad al gestor actualizado."""
+    print(f"✅ beta.py ACTUALIZADO cargado desde: {__file__}")
     @bot.message_handler(commands=["miid"])
     def miid(message):
         if getattr(message, "sender_chat", None) is not None:
@@ -295,4 +297,15 @@ def registrar_beta(bot):
             return
         # Solo ejemplo de límites y mensajería: NO produce comprobantes de pago.
         bot.reply_to(message, "✅ <b>Consulta de demostración registrada.</b>\n" + texto + "\n\nℹ️ No se ha efectuado ni certificado ningún pago.", parse_mode="HTML")
+
+    # TeleBot revisa sus handlers por orden de registro. Si otro módulo
+    # registró /yape u otro comando antes, podría mostrar el texto viejo.
+    # Dar prioridad a ESTE gestor para todos los comandos de SERVICIOS.
+    if getattr(bot, "message_handlers", None):
+        for indice in range(len(bot.message_handlers) - 1, -1, -1):
+            handler = bot.message_handlers[indice]
+            if handler.get("function") is consultas:
+                bot.message_handlers.insert(0, bot.message_handlers.pop(indice))
+                print("✅ Gestor actualizado de consultas colocado en prioridad 1")
+                break
 
