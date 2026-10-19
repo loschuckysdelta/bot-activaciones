@@ -1,298 +1,1068 @@
-import json
 import os
-import time
-from datetime import datetime
-
+import uuid
 import requests
 from telebot import types
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ARCHIVO_GRUPOS = os.path.join(BASE_DIR, "grupos_autorizados.json")
-URL_IMAGEN_PROMO = "https://i.postimg.cc/4d7GwtKG/image.png"
-LINK_DESCARGA = "https://ypfkplus.com/"  # Destino del botón DESCARGAR GRATIS
-ADMIN_IDS = [8635600472]  # Reemplaza o amplía con los ID de administradores.
-LINK_ADMIN = "https://t.me/tuchuckynet_x"
-URL_ACTIVACIONES = "https://activaciones.vercel.app/api"
-X_TOKEN = os.environ.get("ACTIVACIONES_X_TOKEN", "")
 
-SERVICIOS = {
-    "yape": "Yape", "plin": "Plin", "bim": "Bim", "sip": "Sip",
-    "agora": "Agora", "lemon": "Lemon", "panda": "Panda",
-    "prexpe": "Prexpe", "bcp": "BCP", "ibk": "Interbank",
-    "bbva": "BBVA", "scotiabank": "Scotiabank",
-    "ripley": "Ripley", "falabella": "Falabella", "caja": "Caja",
-}
+# =========================================================
+# CONFIGURACIÓN
+# =========================================================
 
-COOLDOWN_GRUPOS = {}
-COOLDOWN_PRIVADO = {}
-USOS_PRIVADOS = {}
-RESET_CONFIRMACIONES = {}
+URL_IMAGEN = "https://i.postimg.cc/PqxzbJ4Z/image.png"
 
+# API DE LICENCIAS
+API_INFO_USER = (
+    "https://server-yape.vercel.app/api/chucky/info_user"
+)
 
-def cargar_grupos():
-    if not os.path.isfile(ARCHIVO_GRUPOS):
-        return {}
-    try:
-        with open(ARCHIVO_GRUPOS, encoding="utf-8") as archivo:
-            datos = json.load(archivo)
-        resultado = {}
-        for grupo, info in datos.items():
-            info["usuarios"] = info.get("usuarios", {}) if isinstance(info.get("usuarios"), dict) else {}
-            resultado[int(grupo)] = info
-        return resultado
-    except (OSError, ValueError, TypeError) as exc:
-        print(f"Error leyendo grupos: {exc}")
-        return {}
+API_ACTIVATE_USER = (
+    "https://server-yape.vercel.app/api/chucky/activate_user"
+)
+
+# API DE CRÉDITOS
+API_PANEL = "https://activaciones.vercel.app"
+
+API_USER = f"{API_PANEL}/api/user"
+API_DEDUCT_CREDITS = f"{API_PANEL}/api/deduct_credits"
 
 
-GRUPOS_AUTORIZADOS = cargar_grupos()
+# =========================================================
+# PRECIOS
+# =========================================================
+
+PRECIO_YAPE = 25
+PRECIO_BCP = 7
+PRECIO_IBK = 7
+PRECIO_BBVA = 7
 
 
-def guardar_grupos():
-    try:
-        temporal = ARCHIVO_GRUPOS + ".tmp"
-        with open(temporal, "w", encoding="utf-8") as archivo:
-            json.dump(GRUPOS_AUTORIZADOS, archivo, indent=2, ensure_ascii=False)
-        os.replace(temporal, ARCHIVO_GRUPOS)
-    except OSError as exc:
-        print(f"Error guardando grupos: {exc}")
+# =========================================================
+# IMAGEN
+# =========================================================
+
+CARPETA_IMAGENES = "assets/imagenes"
+NOMBRE_ARCHIVO = "logo_activacion.png"
+
+RUTA_IMAGEN = os.path.join(
+    CARPETA_IMAGENES,
+    NOMBRE_ARCHIVO
+)
+
+FILE_ID_CACHE = None
 
 
-def convertir_antispam(valor):
-    valor = str(valor).strip().lower()
-    multiplicador = 60 if valor.endswith("m") else 1
-    if valor.endswith(("m", "s")):
-        valor = valor[:-1]
-    segundos = int(valor) * multiplicador
-    if segundos < 0:
-        raise ValueError("El AntiSpam no puede ser negativo")
-    return segundos
+# =========================================================
+# SESIONES TEMPORALES
+# =========================================================
+
+SESIONES = {}
 
 
-def consultar_dias_api(user_id):
-    """Devuelve (activo, días). Sin token o ante error usa plan gratuito."""
-    if not X_TOKEN:
-        return False, 0
-    try:
-        respuesta = requests.get(
-            f"{URL_ACTIVACIONES}/user",
-            params={"id": user_id},
-            headers={"X-TOKEN": X_TOKEN},
-            timeout=5,
+# =========================================================
+# HTTP SESSION
+# =========================================================
+
+http = requests.Session()
+
+
+# =========================================================
+# ASEGURAR IMAGEN
+# =========================================================
+
+def asegurar_imagen():
+
+    if not os.path.exists(CARPETA_IMAGENES):
+
+        os.makedirs(
+            CARPETA_IMAGENES,
+            exist_ok=True
         )
-        respuesta.raise_for_status()
-        datos = respuesta.json()
-        dias = int(datos.get("user", {}).get("days", 0) or 0)
-        return bool(datos.get("success") and dias > 0), max(0, dias)
-    except (requests.RequestException, ValueError, TypeError) as exc:
-        print(f"No se pudieron consultar los días: {exc}")
-        return False, 0
 
+    if os.path.exists(RUTA_IMAGEN):
+        return
 
-def evaluar_permiso(chat_id, user_id):
-    hoy = datetime.now().strftime("%Y-%m-%d")
-    ahora = time.time()
-
-    if chat_id < 0:
-        grupo = GRUPOS_AUTORIZADOS.get(chat_id)
-        if not grupo:
-            return False, "❌ <b>Grupo no autorizado.</b>", "grupo_no_autorizado"
-
-        limite = int(grupo.get("limite_diario", 3))
-        antispam = int(grupo.get("anti_spam", 5))
-        usuarios = grupo.setdefault("usuarios", {})
-        clave = str(user_id)
-        registro = usuarios.get(clave, {"fecha": hoy, "usos": 0})
-        if registro.get("fecha") != hoy:
-            registro = {"fecha": hoy, "usos": 0}
-
-        # Primero se verifica el límite, para que el usuario vea el video
-        # aunque haya enviado el comando antes de terminar el AntiSpam.
-        if registro["usos"] >= limite:
-            return False, (
-                "⚠️ <b>¡Tus consultas se agotaron!</b>\n\n"
-                f"👤 Tu ID: <code>{user_id}</code>\n"
-                f"📊 Usaste <b>{registro['usos']}/{limite}</b> consultas.\n\n"
-                "📸 Consulta la oferta especial a continuación.\n\n"
-                "📱 <b>¿Deseas comprar la APP?</b>\n"
-                "✅ Contacta al administrador.\n\n"
-                "👥 Las demás personas del grupo conservan sus consultas."
-            ), "limite_agotado"
-
-        cooldown = COOLDOWN_GRUPOS.setdefault(chat_id, {})
-        restante = antispam - (ahora - cooldown.get(user_id, 0))
-        if restante > 0:
-            return False, f"⏱ AntiSpam personal: espera <b>{int(restante) + 1}s</b>.", "antispam"
-
-        registro["usos"] += 1
-        usuarios[clave] = registro
-        guardar_grupos()
-        cooldown[user_id] = ahora
-        return True, (
-            f"👥 Grupo autorizado\n📊 Consultas: "
-            f"<b>{registro['usos']}/{limite}</b>"
-        ), "ok"
-
-    activo, dias = consultar_dias_api(user_id)
-    if activo:
-        restante = 5 - (ahora - COOLDOWN_PRIVADO.get(user_id, 0))
-        if restante > 0:
-            return False, f"⏱ Espera <b>{int(restante) + 1}s</b>.", "antispam"
-        COOLDOWN_PRIVADO[user_id] = ahora
-        return True, f"🌟 Plan activo: {dias} días. Consultas ilimitadas.", "ok"
-
-    registro = USOS_PRIVADOS.get(user_id, {"fecha": hoy, "usos": 0})
-    if registro["fecha"] != hoy:
-        registro = {"fecha": hoy, "usos": 0}
-    if registro["usos"] >= 3:
-        return False, (
-            "⚠️ <b>¡Tus consultas se agotaron!</b>\n\n"
-            f"👤 Tu ID: <code>{user_id}</code>\n"
-            "📊 Usaste <b>3/3</b> consultas gratuitas.\n\n"
-            "📸 Consulta la oferta especial a continuación.\n\n"
-            "📱 <b>¿Deseas comprar la APP?</b>\n"
-            "✅ Contacta al administrador o vuelve mañana."
-        ), "limite_agotado"
-
-    restante = 5 - (ahora - COOLDOWN_PRIVADO.get(user_id, 0))
-    if restante > 0:
-        return False, f"⏱ Espera <b>{int(restante) + 1}s</b>.", "antispam"
-
-    registro["usos"] += 1
-    USOS_PRIVADOS[user_id] = registro
-    COOLDOWN_PRIVADO[user_id] = ahora
-    return True, f"🎁 Plan gratuito: <b>{registro['usos']}/3</b> consultas.", "ok"
-
-
-def enviar_limite_alcanzado(bot, message, texto):
-    """Envía el aviso de límite con imagen promocional y botones."""
-    botones = types.InlineKeyboardMarkup()
-    botones.add(types.InlineKeyboardButton(
-        "📲 CONTACTAR AL ADMINISTRADOR", url=LINK_ADMIN
-    ))
-    if LINK_DESCARGA:
-        botones.add(types.InlineKeyboardButton(
-            "⬇️ DESCARGAR GRATIS", url=LINK_DESCARGA
-        ))
-
-    promocion = (
-        "🇵🇪 <b>¡OFERTA ESPECIAL!</b> 🇵🇪\n\n"
-        "🔥 Solo por <b>S/ xxx</b>\n\n"
-        "<b>¿Qué incluye?</b>\n\n"
-        "✅ Saldo ilimitado\n"
-        "✅ Notificaciones en tiempo real\n"
-        "✅ Constancias por Gmail\n"
-        "✅ Autocompletado OSIPTEL\n"
-        "✅ Escáner QR con Inteligencia Artificial\n"
-        "✅ Actualizaciones automáticas\n"
-        "✅ Licencia permanente\n\n"
-        "⬇️ <b>DESCARGAR GRATIS</b>\n"
-        "https://ypfkplus.com/"
-    )
-    mensaje = texto + "\n\n" + promocion
-    kwargs = {
-        "parse_mode": "HTML",
-        "reply_markup": botones,
-        "reply_to_message_id": message.message_id,
-    }
     try:
-        bot.send_photo(
-            message.chat.id,
-            photo=URL_IMAGEN_PROMO,
-            caption=mensaje,
-            **kwargs,
+
+        respuesta = http.get(
+            URL_IMAGEN,
+            stream=True,
+            timeout=10
         )
-    except Exception as exc:
-        print(f"No se pudo enviar la imagen promocional: {exc}")
-        bot.send_message(message.chat.id, mensaje, **kwargs)
+
+        if respuesta.status_code == 200:
+
+            with open(
+                RUTA_IMAGEN,
+                "wb"
+            ) as archivo:
+
+                for chunk in respuesta.iter_content(
+                    chunk_size=1024
+                ):
+
+                    if chunk:
+                        archivo.write(chunk)
+
+    except Exception as e:
+
+        print(
+            f"[ACTIVATE] Error descargando imagen: {e}"
+        )
 
 
-def registrar_beta(bot):
-    @bot.message_handler(commands=["miid"])
-    def miid(message):
-        if getattr(message, "sender_chat", None) is not None:
-            bot.reply_to(message, "⚠️ Envía el comando con tu perfil, no como administrador anónimo.")
-            return
-        bot.reply_to(message, f"👤 Tu ID: <code>{message.from_user.id}</code>\n👥 Chat: <code>{message.chat.id}</code>", parse_mode="HTML")
+# =========================================================
+# CONSULTAR USUARIO DE LICENCIAS
+# =========================================================
 
-    @bot.message_handler(commands=["addgrupo"])
-    def addgrupo(message):
-        if message.from_user.id not in ADMIN_IDS:
-            return
-        try:
-            _, identificador, limite, espera = message.text.split()
-            identificador, limite = int(identificador), int(limite)
-            espera = convertir_antispam(espera)
-            if identificador >= 0 or limite <= 0:
-                raise ValueError("Grupo o límite inválido")
-            anteriores = GRUPOS_AUTORIZADOS.get(identificador, {}).get("usuarios", {})
-            GRUPOS_AUTORIZADOS[identificador] = {
-                "limite_diario": limite, "anti_spam": espera, "usuarios": anteriores
+def consultar_usuario_yape(correo):
+
+    try:
+
+        respuesta = http.get(
+            API_INFO_USER,
+            params={
+                "email": correo
+            },
+            timeout=10
+        )
+
+        if respuesta.status_code == 404:
+
+            return {
+                "ok": False,
+                "tipo": "no_encontrado"
             }
-            guardar_grupos()
-            bot.reply_to(message, f"✅ Grupo <code>{identificador}</code> autorizado.\n📊 {limite} consultas por persona.\n⏱ {espera}s de AntiSpam.", parse_mode="HTML")
-        except (ValueError, TypeError):
-            bot.reply_to(message, "Uso: <code>/addgrupo ID_GRUPO LIMITE 30s</code>", parse_mode="HTML")
 
-    @bot.message_handler(commands=["delgrupo"])
-    def delgrupo(message):
-        if message.from_user.id not in ADMIN_IDS:
-            return
+        respuesta.raise_for_status()
+
+        datos = respuesta.json()
+
+        return {
+            "ok": True,
+            "datos": datos
+        }
+
+    except requests.RequestException as e:
+
+        print(
+            f"[ACTIVATE] Error info_user: {e}"
+        )
+
+        return {
+            "ok": False,
+            "tipo": "conexion"
+        }
+
+    except ValueError:
+
+        return {
+            "ok": False,
+            "tipo": "json"
+        }
+
+
+# =========================================================
+# CONVERTIR DATOS A LICENCIAS
+# =========================================================
+
+def obtener_licencias(datos):
+
+    return {
+
+        # IMPORTANTE:
+        # status = estado general de la cuenta
+        # payment = licencia Yape comprada/activada
+        # El backend actual no devuelve un campo "yape", por eso Yape se lee desde payment.
+        "yape": bool(
+            datos.get("payment", False)
+        ),
+
+        "bcp": bool(
+            datos.get("bcp", False)
+        ),
+
+        "ibk": bool(
+            datos.get("ibk", False)
+        ),
+
+        "bbva": bool(
+            datos.get("bbva", False)
+        )
+    }
+
+
+# =========================================================
+# CONSULTAR CRÉDITOS TELEGRAM
+# =========================================================
+
+def consultar_creditos(telegram_id):
+
+    try:
+
+        respuesta = http.get(
+            API_USER,
+            params={
+                "id": str(telegram_id)
+            },
+            timeout=10
+        )
+
+        if respuesta.status_code == 404:
+
+            return {
+                "ok": False,
+                "tipo": "no_registrado"
+            }
+
+        respuesta.raise_for_status()
+
+        datos = respuesta.json()
+
+        usuario = datos.get(
+            "user",
+            datos.get(
+                "usuario",
+                datos
+            )
+        )
+
+        creditos = usuario.get(
+            "credits",
+            usuario.get(
+                "creditos",
+                0
+            )
+        )
+
         try:
-            identificador = int(message.text.split()[1])
-            if identificador not in GRUPOS_AUTORIZADOS:
-                bot.reply_to(message, "⚠️ Grupo no autorizado.")
+
+            creditos = int(creditos)
+
+        except (TypeError, ValueError):
+
+            creditos = 0
+
+        return {
+            "ok": True,
+            "creditos": creditos,
+            "datos": usuario
+        }
+
+    except requests.RequestException as e:
+
+        print(
+            f"[CREDITOS] Error consultando usuario: {e}"
+        )
+
+        return {
+            "ok": False,
+            "tipo": "conexion"
+        }
+
+    except ValueError:
+
+        return {
+            "ok": False,
+            "tipo": "json"
+        }
+
+
+# =========================================================
+# DESCONTAR CRÉDITOS
+# =========================================================
+
+def descontar_creditos(
+    telegram_id,
+    cantidad
+):
+
+    payload = {
+        "telegramId": str(telegram_id),
+        "amount": abs(cantidad)
+    }
+
+    try:
+
+        respuesta = http.post(
+            API_DEDUCT_CREDITS,
+            json=payload,
+            timeout=10
+        )
+
+        if respuesta.ok:
+
+            print(
+                f"[CREDITOS] Éxito al descontar en {API_DEDUCT_CREDITS} con payload: {payload}"
+            )
+
+            return True
+
+        print(
+            f"[CREDITOS] Falló status={respuesta.status_code} respuesta={respuesta.text}"
+        )
+
+    except requests.RequestException as e:
+
+        print(
+            f"[CREDITOS] Error de red en {API_DEDUCT_CREDITS}: {e}"
+        )
+
+    return False
+
+
+# =========================================================
+# CALCULAR PRECIO (SOLO COBRA LICENCIAS NUEVAS)
+# =========================================================
+
+def calcular_precio(
+    original,
+    nuevas
+):
+
+    total = 0
+
+    if not original["yape"] and nuevas["yape"]:
+        total += PRECIO_YAPE
+
+    if not original["bcp"] and nuevas["bcp"]:
+        total += PRECIO_BCP
+
+    if not original["ibk"] and nuevas["ibk"]:
+        total += PRECIO_IBK
+
+    if not original["bbva"] and nuevas["bbva"]:
+        total += PRECIO_BBVA
+
+    return total
+
+
+# =========================================================
+# GENERAR TEXTO
+# =========================================================
+
+def generar_texto(
+    correo,
+    licencias,
+    precio=0,
+    creditos=0
+):
+
+    yape = "✅" if licencias["yape"] else "⬜"
+    bcp = "✅" if licencias["bcp"] else "⬜"
+    ibk = "✅" if licencias["ibk"] else "⬜"
+    bbva = "✅" if licencias["bbva"] else "⬜"
+
+    return (
+        f"[<b>#YapeXpress</b>] ➣ ACTIVAR LICENCIAS\n\n"
+
+        f"[📧] <b>CLIENTE</b>\n"
+        f"- Correo ➣ <code>{correo}</code>\n\n"
+
+        f"[👨‍💼] <b>TU ESTADO</b>\n"
+        f"- Sistema ➣ ACTIVO\n"
+        f"- Créditos ➣ <b>{creditos} disponibles</b>\n\n"
+
+        f"[🔐] <b>LICENCIAS DISPONIBLES</b>\n"
+
+        f"{yape} <b>YAPE</b> ➣ {PRECIO_YAPE} créditos\n"
+        f"{bcp} <b>BCP</b> ➣ {PRECIO_BCP} créditos\n"
+        f"{ibk} <b>INTERBANK</b> ➣ {PRECIO_IBK} créditos\n"
+        f"{bbva} <b>BBVA</b> ➣ {PRECIO_BBVA} créditos\n\n"
+
+        ""
+    )
+
+
+# =========================================================
+# GENERAR TECLADO
+# =========================================================
+
+def generar_teclado(
+    token,
+    licencias
+):
+
+    teclado = types.InlineKeyboardMarkup()
+
+    txt_yape = "✅ YAPE" if licencias["yape"] else "⬜ YAPE"
+    txt_bcp = "✅ BCP" if licencias["bcp"] else "⬜ BCP"
+    txt_ibk = "✅ IBK" if licencias["ibk"] else "⬜ IBK"
+    txt_bbva = "✅ BBVA" if licencias["bbva"] else "⬜ BBVA"
+
+    teclado.row(
+        types.InlineKeyboardButton(
+            txt_yape,
+            callback_data=f"lic:yape:{token}"
+        )
+    )
+
+    teclado.row(
+        types.InlineKeyboardButton(
+            txt_bcp,
+            callback_data=f"lic:bcp:{token}"
+        ),
+        types.InlineKeyboardButton(
+            txt_ibk,
+            callback_data=f"lic:ibk:{token}"
+        ),
+        types.InlineKeyboardButton(
+            txt_bbva,
+            callback_data=f"lic:bbva:{token}"
+        )
+    )
+
+    teclado.row(
+        types.InlineKeyboardButton(
+            "➡ CONTINUAR",
+            callback_data=f"lic:confirmar:{token}"
+        )
+    )
+
+    teclado.row(
+        types.InlineKeyboardButton(
+            "⬅️ VOLVER / SALIR",
+            callback_data=f"lic:volver:{token}"
+        )
+    )
+
+    teclado.row(
+        types.InlineKeyboardButton(
+            "❌ CANCELAR",
+            callback_data=f"lic:cancelar:{token}"
+        )
+    )
+
+    return teclado
+
+
+# =========================================================
+# REGISTRAR HANDLERS
+# =========================================================
+
+def registrar_activate(bot):
+
+    asegurar_imagen()
+
+    # =====================================================
+    # /activate
+    # =====================================================
+
+    @bot.message_handler(commands=["activate"])
+    def activate(message):
+
+        global FILE_ID_CACHE
+
+        args = message.text.split(maxsplit=1)
+
+        if len(args) < 2:
+
+            bot.reply_to(
+                message,
+                "⚠️ <b>USO INCORRECTO</b>\n\n"
+                "Ingresa el correo:\n\n"
+                "<code>/activate correo@gmail.com</code>",
+                parse_mode="HTML"
+            )
+
+            return
+
+        correo = args[1].strip().lower()
+
+        resultado_creditos = consultar_creditos(
+            message.from_user.id
+        )
+
+        if not resultado_creditos["ok"]:
+
+            if resultado_creditos["tipo"] == "no_registrado":
+
+                bot.reply_to(
+                    message,
+                    "❌ <b>NO ESTÁS REGISTRADO</b>\n\n"
+                    "No se encontró tu cuenta en el sistema.",
+                    parse_mode="HTML"
+                )
+
                 return
-            del GRUPOS_AUTORIZADOS[identificador]
-            COOLDOWN_GRUPOS.pop(identificador, None)
-            guardar_grupos()
-            bot.reply_to(message, "✅ Grupo eliminado de los autorizados.")
-        except (ValueError, IndexError):
-            bot.reply_to(message, "Uso: /delgrupo ID_GRUPO")
 
-    @bot.message_handler(commands=["resetdb"])
-    def resetdb(message):
-        user_id = message.from_user.id
-        if user_id not in ADMIN_IDS:
-            bot.reply_to(message, "❌ No tienes permiso.")
-            return
-        partes = message.text.split()
-        if len(partes) == 1:
-            RESET_CONFIRMACIONES[user_id] = time.time()
-            bot.reply_to(message, "⚠️ Reiniciará grupos y contadores. Confirma en 60 segundos con /resetdb confirmar")
-            return
-        if len(partes) != 2 or partes[1].lower() != "confirmar":
-            bot.reply_to(message, "Uso: /resetdb confirmar")
-            return
-        inicio = RESET_CONFIRMACIONES.get(user_id)
-        if inicio is None or time.time() - inicio > 60:
-            RESET_CONFIRMACIONES.pop(user_id, None)
-            bot.reply_to(message, "⌛ Confirmación inexistente o vencida. Usa /resetdb primero.")
-            return
-        GRUPOS_AUTORIZADOS.clear()
-        COOLDOWN_GRUPOS.clear()
-        COOLDOWN_PRIVADO.clear()
-        USOS_PRIVADOS.clear()
-        RESET_CONFIRMACIONES.pop(user_id, None)
-        guardar_grupos()
-        bot.reply_to(message, "✅ Grupos y contadores reiniciados.")
+            bot.reply_to(
+                message,
+                "⚠️ <b>ERROR DE CRÉDITOS</b>\n\n"
+                "No pude consultar tu saldo.",
+                parse_mode="HTML"
+            )
 
-    @bot.message_handler(commands=list(SERVICIOS))
-    def consultas(message):
-        if message.chat.id < 0 and getattr(message, "sender_chat", None) is not None:
-            bot.reply_to(message, "⚠️ No se puede identificar al administrador anónimo. Envía con tu perfil personal.")
             return
-        partes = message.text.split(maxsplit=1)
-        if len(partes) < 2:
-            bot.reply_to(message, "ℹ️ Para esta demostración usa /yape prueba (o el comando de servicio correspondiente).")
+
+        creditos = resultado_creditos["creditos"]
+
+        consulta = consultar_usuario_yape(correo)
+
+        if not consulta["ok"]:
+
+            if consulta["tipo"] == "no_encontrado":
+
+                bot.reply_to(
+                    message,
+                    "❌ <b>CORREO NO ENCONTRADO</b>\n\n"
+                    f"📧 <code>{correo}</code>\n\n"
+                    "El correo no existe en el sistema.",
+                    parse_mode="HTML"
+                )
+
+                return
+
+            bot.reply_to(
+                message,
+                "⚠️ <b>ERROR DEL SERVIDOR</b>\n\n"
+                "No pude consultar las licencias.",
+                parse_mode="HTML"
+            )
+
             return
-        permitido, texto, motivo = evaluar_permiso(message.chat.id, message.from_user.id)
-        if not permitido:
-            if motivo == "limite_agotado":
-                enviar_limite_alcanzado(bot, message, texto)
+
+        datos = consulta["datos"]
+
+        if datos.get("banned", False):
+
+            bot.reply_to(
+                message,
+                "🚫 <b>USUARIO BLOQUEADO</b>\n\n"
+                f"📧 <code>{correo}</code>\n\n"
+                "No se pueden realizar activaciones.",
+                parse_mode="HTML"
+            )
+
+            return
+
+        licencias = obtener_licencias(datos)
+
+        token = uuid.uuid4().hex[:10]
+
+        SESIONES[token] = {
+            "correo": correo,
+            "telegram_id": message.from_user.id,
+            "creditos": creditos,
+            "licencias": licencias.copy(),
+            "original": licencias.copy()
+        }
+
+        precio = calcular_precio(
+            SESIONES[token]["original"],
+            SESIONES[token]["licencias"]
+        )
+
+        texto = generar_texto(
+            correo,
+            licencias,
+            precio,
+            creditos
+        )
+
+        teclado = generar_teclado(
+            token,
+            licencias
+        )
+
+        try:
+
+            if FILE_ID_CACHE:
+
+                bot.send_photo(
+                    message.chat.id,
+                    FILE_ID_CACHE,
+                    caption=texto,
+                    reply_markup=teclado,
+                    parse_mode="HTML"
+                )
+
+            elif os.path.exists(RUTA_IMAGEN):
+
+                with open(RUTA_IMAGEN, "rb") as photo:
+
+                    msg = bot.send_photo(
+                        message.chat.id,
+                        photo,
+                        caption=texto,
+                        reply_markup=teclado,
+                        parse_mode="HTML"
+                    )
+
+                    FILE_ID_CACHE = msg.photo[-1].file_id
+
             else:
-                bot.reply_to(message, texto, parse_mode="HTML")
-            return
-        # Solo ejemplo de límites y mensajería: NO produce comprobantes de pago.
-        bot.reply_to(message, "✅ <b>Consulta de demostración registrada.</b>\n" + texto + "\n\nℹ️ No se ha efectuado ni certificado ningún pago.", parse_mode="HTML")
 
+                msg = bot.send_photo(
+                    message.chat.id,
+                    URL_IMAGEN,
+                    caption=texto,
+                    reply_markup=teclado,
+                    parse_mode="HTML"
+                )
+
+                FILE_ID_CACHE = msg.photo[-1].file_id
+
+        except Exception as e:
+
+            print(
+                f"[ACTIVATE] Error enviando panel: {e}"
+            )
+
+
+    # =====================================================
+    # BOTONES DE BANCOS Y YAPE
+    # =====================================================
+
+    @bot.callback_query_handler(
+        func=lambda call: call.data.startswith("lic:yape:")
+        or call.data.startswith("lic:bcp:")
+        or call.data.startswith("lic:ibk:")
+        or call.data.startswith("lic:bbva:")
+    )
+    def toggle_banco(call):
+
+        partes = call.data.split(":")
+
+        if len(partes) != 3:
+
+            bot.answer_callback_query(
+                call.id,
+                "❌ Botón inválido."
+            )
+
+            return
+
+        banco = partes[1]
+
+        token = partes[2]
+
+        sesion = SESIONES.get(token)
+
+        if not sesion:
+
+            bot.answer_callback_query(
+                call.id,
+                "⚠️ Esta operación expiró.",
+                show_alert=True
+            )
+
+            return
+
+        if call.from_user.id != sesion["telegram_id"]:
+
+            bot.answer_callback_query(
+                call.id,
+                "❌ Este menú no te pertenece.",
+                show_alert=True
+            )
+
+            return
+
+        licencias = sesion["licencias"]
+        original = sesion["original"]
+
+        # Si la licencia YA estaba comprada cuando se abrió el panel,
+        # queda marcada y no se puede volver a seleccionar ni cobrar.
+        if original.get(banco, False):
+            bot.answer_callback_query(
+                call.id,
+                "✅ Esta licencia ya está comprada.",
+                show_alert=True
+            )
+            return
+
+        # Solo las licencias que estaban en blanco pueden marcarse/desmarcarse.
+        licencias[banco] = not licencias[banco]
+
+        precio = calcular_precio(
+            sesion["original"],
+            licencias
+        )
+
+        bot.answer_callback_query(call.id)
+
+        try:
+
+            bot.edit_message_caption(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                caption=generar_texto(
+                    sesion["correo"],
+                    licencias,
+                    precio,
+                    sesion["creditos"]
+                ),
+                reply_markup=generar_teclado(
+                    token,
+                    licencias
+                ),
+                parse_mode="HTML"
+            )
+
+        except Exception as e:
+
+            print(
+                f"[ACTIVATE] Error editando panel: {e}"
+            )
+
+
+    # =====================================================
+    # CONFIRMAR
+    # =====================================================
+
+    @bot.callback_query_handler(
+        func=lambda call: call.data.startswith("lic:confirmar:")
+    )
+    def confirmar(call):
+
+        partes = call.data.split(":")
+
+        if len(partes) != 3:
+
+            bot.answer_callback_query(call.id)
+
+            return
+
+        token = partes[2]
+
+        sesion = SESIONES.get(token)
+
+        if not sesion:
+
+            bot.answer_callback_query(
+                call.id,
+                "⚠️ Esta operación expiró.",
+                show_alert=True
+            )
+
+            return
+
+        if call.from_user.id != sesion["telegram_id"]:
+
+            bot.answer_callback_query(
+                call.id,
+                "❌ Este menú no te pertenece.",
+                show_alert=True
+            )
+
+            return
+
+        telegram_id = sesion["telegram_id"]
+
+        correo = sesion["correo"]
+
+        original = sesion["original"]
+
+        licencias = sesion["licencias"]
+
+        # Revalidar el estado REAL justo antes de comprar.
+        # Esto evita cobrar otra vez si la licencia ya fue activada/comprada
+        # después de abrir el menú.
+        consulta_previa = consultar_usuario_yape(correo)
+
+        if not consulta_previa["ok"]:
+            bot.answer_callback_query(
+                call.id,
+                "⚠️ No pude verificar el estado actual de las licencias.",
+                show_alert=True
+            )
+            return
+
+        original_actual = obtener_licencias(consulta_previa["datos"])
+
+        # Mantener activas las que ya existen y sumar SOLO lo seleccionado.
+        seleccion_final = {
+            "yape": original_actual["yape"] or licencias["yape"],
+            "bcp": original_actual["bcp"] or licencias["bcp"],
+            "ibk": original_actual["ibk"] or licencias["ibk"],
+            "bbva": original_actual["bbva"] or licencias["bbva"],
+        }
+
+        precio = calcular_precio(
+            original_actual,
+            seleccion_final
+        )
+
+        if precio <= 0:
+
+            bot.answer_callback_query(
+                call.id,
+                "⚠️ No hay licencias nuevas seleccionadas por activar.",
+                show_alert=True
+            )
+
+            return
+
+        resultado_creditos = consultar_creditos(telegram_id)
+
+        if not resultado_creditos["ok"]:
+
+            bot.answer_callback_query(
+                call.id,
+                "⚠️ No pude consultar tus créditos.",
+                show_alert=True
+            )
+
+            return
+
+        creditos = resultado_creditos["creditos"]
+
+        if creditos < precio:
+
+            faltan = precio - creditos
+
+            bot.answer_callback_query(
+                call.id,
+                "❌ Créditos insuficientes.",
+                show_alert=True
+            )
+
+            bot.send_message(
+                call.message.chat.id,
+                (
+                    "❌ <b>CRÉDITOS INSUFICIENTES</b>\n\n"
+                    f"💰 Tienes ➣ <b>{creditos} créditos</b>\n"
+                    f"💳 Necesitas ➣ <b>{precio} créditos</b>\n"
+                    f"📉 Te faltan ➣ <b>{faltan} créditos</b>\n\n"
+                    "🛒 ¿Quieres comprar créditos?\n\n"
+                    "Escribe:\n<code>/buy</code>"
+                ),
+                parse_mode="HTML"
+            )
+
+            return
+
+        # =================================================
+        # ACTIVAR EN API
+        # =================================================
+
+        try:
+
+            payload = {
+                "payment": True,
+                "yape": seleccion_final["yape"],
+                "bcp": seleccion_final["bcp"],
+                "ibk": seleccion_final["ibk"],
+                "bbva": seleccion_final["bbva"]
+            }
+
+            respuesta = http.post(
+                API_ACTIVATE_USER,
+                params={
+                    "email": correo
+                },
+                json=payload,
+                timeout=10
+            )
+
+            if respuesta.status_code == 404:
+
+                bot.answer_callback_query(
+                    call.id,
+                    "❌ Usuario no encontrado.",
+                    show_alert=True
+                )
+
+                return
+
+            respuesta.raise_for_status()
+
+        except requests.RequestException as e:
+
+            print(
+                f"[ACTIVATE] Error activate_user: {e}"
+            )
+
+            bot.answer_callback_query(
+                call.id,
+                "⚠️ Error activando la licencia.",
+                show_alert=True
+            )
+
+            return
+
+        # =================================================
+        # VERIFICAR QUE LA API REALMENTE GUARDÓ LA COMPRA
+        # ANTES DE DESCONTAR CRÉDITOS
+        # =================================================
+
+        consulta_actualizada = consultar_usuario_yape(correo)
+
+        if not consulta_actualizada["ok"]:
+            bot.answer_callback_query(
+                call.id,
+                "⚠️ Se activó la solicitud, pero no pude verificarla. No se descontaron créditos.",
+                show_alert=True
+            )
+            return
+
+        nuevas_reales = obtener_licencias(consulta_actualizada["datos"])
+
+        # Solo exigimos que estén activas las licencias NUEVAS que se van a cobrar.
+        nuevas_seleccionadas = {
+            banco: (seleccion_final[banco] and not original[banco])
+            for banco in ("yape", "bcp", "ibk", "bbva")
+        }
+
+        no_guardadas = [
+            banco.upper()
+            for banco, es_nueva in nuevas_seleccionadas.items()
+            if es_nueva and not nuevas_reales.get(banco, False)
+        ]
+
+        if no_guardadas:
+            bot.answer_callback_query(
+                call.id,
+                "⚠️ La API no confirmó: " + ", ".join(no_guardadas) + ". No se descontaron créditos.",
+                show_alert=True
+            )
+            return
+
+        # =================================================
+        # DESCONTAR CRÉDITOS SOLO DESPUÉS DE CONFIRMAR
+        # =================================================
+
+        descuento_ok = descontar_creditos(telegram_id, precio)
+
+        if not descuento_ok:
+            bot.answer_callback_query(
+                call.id,
+                "⚠️ La licencia quedó activa, pero falló el descuento de créditos.",
+                show_alert=True
+            )
+            return
+
+        nuevos_creditos = creditos - precio
+
+        try:
+
+            teclado_salida = types.InlineKeyboardMarkup(row_width=2)
+            teclado_salida.row(
+                types.InlineKeyboardButton(
+                    "⬅️ RETROCEDER",
+                    callback_data=f"lic:volver:{token}"
+                ),
+                types.InlineKeyboardButton(
+                    "❌ SALIR",
+                    callback_data=f"lic:salir:{token}"
+                )
+            )
+
+            bot.edit_message_caption(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                caption=generar_texto(
+                    correo,
+                    nuevas_reales,
+                    0,
+                    nuevos_creditos
+                ),
+                reply_markup=teclado_salida,
+                parse_mode="HTML"
+            )
+
+        except Exception as e:
+
+            print(
+                f"[ACTIVATE] Error actualizando resultado: {e}"
+            )
+
+        bot.answer_callback_query(
+            call.id,
+            "✅ Activación completada.",
+            show_alert=True
+        )
+
+        # La sesión se mantiene hasta pulsar RETROCEDER o SALIR.
+
+
+    # =====================================================
+    # VOLVER / SALIR
+    # =====================================================
+
+    @bot.callback_query_handler(
+        func=lambda call: call.data.startswith("lic:volver:")
+    )
+    def volver_salir(call):
+
+        partes = call.data.split(":")
+
+        token = partes[2] if len(partes) == 3 else None
+
+        bot.answer_callback_query(call.id)
+
+        if token:
+            SESIONES.pop(token, None)
+
+        try:
+            bot.delete_message(
+                call.message.chat.id,
+                call.message.message_id
+            )
+
+        except Exception as e:
+            print(
+                f"[ACTIVATE] Error al volver/salir: {e}"
+            )
+
+
+    # =====================================================
+    # SALIR
+    # =====================================================
+
+    @bot.callback_query_handler(
+        func=lambda call: call.data.startswith("lic:salir:")
+    )
+    def salir(call):
+
+        partes = call.data.split(":")
+        token = partes[2] if len(partes) == 3 else None
+
+        bot.answer_callback_query(call.id)
+
+        if token:
+            SESIONES.pop(token, None)
+
+        try:
+            bot.delete_message(
+                call.message.chat.id,
+                call.message.message_id
+            )
+
+        except Exception as e:
+            print(
+                f"[ACTIVATE] Error al salir: {e}"
+            )
+
+
+    # =====================================================
+    # CANCELAR
+    # =====================================================
+
+    @bot.callback_query_handler(
+        func=lambda call: call.data.startswith("lic:cancelar:")
+    )
+    def cancelar(call):
+
+        partes = call.data.split(":")
+
+        token = partes[2] if len(partes) == 3 else None
+
+        bot.answer_callback_query(call.id)
+
+        if token:
+
+            SESIONES.pop(token, None)
+
+        try:
+
+            bot.delete_message(
+                call.message.chat.id,
+                call.message.message_id
+            )
+
+        except Exception as e:
+
+            print(
+                f"[ACTIVATE] Error cancelando: {e}"
+            )
