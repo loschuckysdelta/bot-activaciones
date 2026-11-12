@@ -1,3 +1,4 @@
+import html
 import requests
 
 API_USER = "https://activaciones.vercel.app/api/user"
@@ -11,10 +12,10 @@ def registrar_me(bot):
     def me(message):
 
         usuario = message.from_user
-        nombre = usuario.first_name or "Sin nombre"
+        nombre = html.escape(usuario.first_name or "Sin nombre")
 
         username = (
-            f"@{usuario.username}"
+            f"@{html.escape(usuario.username)}"
             if usuario.username
             else "@Sin_username"
         )

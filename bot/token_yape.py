@@ -185,6 +185,8 @@ def registrar_token_yape(bot):
 
         SELECCION_TOKEN[user_id] = dias
 
+        bot.answer_callback_query(call.id, f"✅ {dias} días seleccionados")
+
         try:
             bot.edit_message_text(
                 texto_menu(call, dias),
@@ -195,11 +197,6 @@ def registrar_token_yape(bot):
             )
         except Exception:
             pass
-
-        bot.answer_callback_query(
-            call.id,
-            f"✅ {dias} días seleccionado"
-        )
 
     # =====================================================
     # 7 DÍAS
@@ -483,6 +480,8 @@ def registrar_token_yape(bot):
 
         SELECCION_TOKEN[user_id] = 7
 
+        bot.answer_callback_query(call.id)
+
         try:
 
             bot.edit_message_text(
@@ -495,8 +494,6 @@ def registrar_token_yape(bot):
 
         except Exception:
             pass
-
-        bot.answer_callback_query(call.id)
 
     # =====================================================
     # CANCELAR

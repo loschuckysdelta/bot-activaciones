@@ -40,7 +40,10 @@ PRECIO_BBVA = 7
 # IMAGEN
 # =========================================================
 
-CARPETA_IMAGENES = "assets/imagenes"
+CARPETA_IMAGENES = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "assets", "imagenes"
+)
 NOMBRE_ARCHIVO = "logo_activacion.png"
 
 RUTA_IMAGEN = os.path.join(
