@@ -191,11 +191,9 @@ def evaluar_permiso(chat_id, user_id, comando):
 
     # --- 1. VALIDACIÓN SI ES UN GRUPO ---
     if chat_id < 0:
-        # Si el grupo está en la lista de Grupos Puentes Autorizados -> PASE VIP (Infinito)
         if chat_id in GRUPOS_AUTORIZADOS:
             grupo_info = GRUPOS_AUTORIZADOS[chat_id]
             
-            # Verificar si la licencia del grupo puente ha expirado
             fecha_exp_str = grupo_info.get("fecha_expiracion")
             if fecha_exp_str:
                 try:
@@ -214,7 +212,6 @@ def evaluar_permiso(chat_id, user_id, comando):
             anti_spam = int(grupo_info.get("anti_spam", 5))
             cooldown = COOLDOWN_GRUPOS.setdefault(chat_id, {})
 
-            # Anti-spam personal dentro del grupo
             transcurrido = ahora - cooldown.get(user_id, 0)
             if transcurrido < anti_spam:
                 espera = max(1, int(anti_spam - transcurrido + 0.999))
@@ -222,13 +219,10 @@ def evaluar_permiso(chat_id, user_id, comando):
 
             cooldown[user_id] = ahora
             
-            # 🟢 ¡Acceso ilimitado / VIP concedido en Grupo Puente!
             return True, (
                 "👥 <b>Grupo Puente Autorizado (VIP)</b>\n"
                 "♾️ Todos los comandos desbloqueados (Ilimitado)"
             ), "ok"
-
-        # Si el grupo NO es un grupo puente autorizado, continúa con el flujo estándar (en lugar de bloquearlo)
 
     # --- 2. VALIDACIÓN ESTÁNDAR (Para Privados y Grupos No Puentes) ---
     anti_spam = 5
@@ -240,7 +234,6 @@ def evaluar_permiso(chat_id, user_id, comando):
 
     tiene_dias, cantidad_dias = consultar_dias_api(user_id)
 
-    # Servicios exclusivos para usuarios con días en chats normales / privados
     if comando in SERVICIOS_SOLO_CON_DIAS:
         if not tiene_dias:
             return False, (
@@ -256,7 +249,6 @@ def evaluar_permiso(chat_id, user_id, comando):
             f"♾️ Acceso concedido a /{comando}"
         ), "ok"
 
-    # Servicio /yape (1 consulta gratis diaria o ilimitada si tiene días)
     if comando in SERVICIOS_CON_GRATIS:
         if tiene_dias:
             return True, (
@@ -299,7 +291,7 @@ def evaluar_permiso(chat_id, user_id, comando):
 
 
 # ========================================================
-# 6. SOLICITAR VOUCHER A LA API
+# 6. SOLICITAR VOUCHER A LA API Y PROMOCIÓN
 # ========================================================
 
 def solicitar_voucher_api(endpoint, payload):
@@ -327,24 +319,29 @@ def solicitar_voucher_api(endpoint, payload):
 
 
 def enviar_limite_alcanzado(bot, message, texto):
-    botones = types.InlineKeyboardMarkup()
-    botones.add(types.InlineKeyboardButton("📲 CONTACTAR AL ADMINISTRADOR", url=LINK_ADMIN))
+    link_comprar_bot = f"{LINK_ADMIN}?text=Hola,%20deseo%20comprar%20la%20licencia%20de%20bot%20de%20vouchers%2030%20días%20por%20S/%205"
+    link_comprar_app = f"{LINK_ADMIN}?text=Hola,%20deseo%20comprar%20la%20licencia%20de%20app%20de%20yape%20por%20S/%2050"
+
+    botones = types.InlineKeyboardMarkup(row_width=1)
+    botones.add(
+        types.InlineKeyboardButton("💳 COMPRAR LICENCIA BOT 30 DÍAS (S/ 5)", url=link_comprar_bot),
+        types.InlineKeyboardButton("📱 COMPRAR LICENCIA APP DE YAPE (S/ 50)", url=link_comprar_app)
+    )
     if LINK_DESCARGA:
-        botones.add(types.InlineKeyboardButton("⬇️ DESCARGAR GRATIS", url=LINK_DESCARGA))
+        botones.add(types.InlineKeyboardButton("⬇️ DESCARGAR APP GRATIS", url=LINK_DESCARGA))
 
     promocion = (
-        "🇵🇪 <b>¡OFERTA ESPECIAL!</b> 🇵🇪\n\n"
-        "🔥 Solo por <b>S/ xxx</b>\n\n"
-        "<b>¿Qué incluye?</b>\n\n"
-        "✅ Saldo ilimitado\n"
+        "🇵🇪 <b>¡OFERTA ESPECIAL - ADQUIERE TU ACCESO!</b> 🇵🇪\n\n"
+        "🔥 <b>Elige tu mejor opción:</b>\n\n"
+        "🤖 <b>Licencia de Bot de Vouchers (30 días):</b> <code>S/ 5.00</code>\n"
+        "📱 <b>Licencia de App de Yape:</b> <code>S/ 50.00</code>\n\n"
+        "<b>¿Qué incluye el acceso?</b>\n\n"
+        "✅ Saldo y consultas ilimitadas\n"
         "✅ Notificaciones en tiempo real\n"
         "✅ Constancias por Gmail\n"
         "✅ Autocompletado OSIPTEL\n"
         "✅ Escáner QR con Inteligencia Artificial\n"
-        "✅ Actualizaciones automáticas\n"
-        "✅ Licencia permanente\n\n"
-        "⬇️ <b>DESCARGAR GRATIS</b>\n"
-        "https://ypfkplus.com/"
+        "✅ Actualizaciones automáticas"
     )
     mensaje = texto + "\n\n" + promocion
     kwargs = {
