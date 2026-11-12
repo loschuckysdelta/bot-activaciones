@@ -21,7 +21,7 @@ X_TOKEN = "4d5a7b9c1e2f3a4b5c6d7e8f9a0b1c2d"
 ADMIN_IDS = [8635600472]
 LINK_ADMIN = "https://t.me/tuchuckynet_x"
 LINK_DESCARGA = "https://ypfkplus.com/"
-URL_IMAGEN_PROMO = "https://i.postimg.cc/4d7GwtKG/image.png"
+URL_IMAGEN_PROMO = "https://i.postimg.cc/15tzKhC1/image.png"
 
 # ========================================================
 # 2. ARCHIVOS Y CACHÉ
@@ -334,14 +334,7 @@ def enviar_limite_alcanzado(bot, message, texto):
         "🇵🇪 <b>¡OFERTA ESPECIAL - ADQUIERE TU ACCESO!</b> 🇵🇪\n\n"
         "🔥 <b>Elige tu mejor opción:</b>\n\n"
         "🤖 <b>Licencia de Bot de Vouchers (30 días):</b> <code>S/ 5.00</code>\n"
-        "📱 <b>Licencia de App de Yape:</b> <code>S/ 50.00</code>\n\n"
-        "<b>¿Qué incluye el acceso?</b>\n\n"
-        "✅ Saldo y consultas ilimitadas\n"
-        "✅ Notificaciones en tiempo real\n"
-        "✅ Constancias por Gmail\n"
-        "✅ Autocompletado OSIPTEL\n"
-        "✅ Escáner QR con Inteligencia Artificial\n"
-        "✅ Actualizaciones automáticas"
+        "📱 <b>Licencia de App de Yape:</b> <code>S/ 50.00</code>"
     )
     mensaje = texto + "\n\n" + promocion
     kwargs = {
