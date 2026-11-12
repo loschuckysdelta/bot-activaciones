@@ -179,7 +179,7 @@ def consultar_dias_api(user_id):
 
 
 # ========================================================
-# 5. EVALUAR PERMISO (GRUPOS Y PRIVADO)
+# 5. EVALUAR PERMISO (GRUPOS PUENTE Y PRIVADO)
 # ========================================================
 
 def evaluar_permiso(chat_id, user_id, comando):
@@ -189,52 +189,58 @@ def evaluar_permiso(chat_id, user_id, comando):
     except Exception:
         hoy_dt = datetime.now()
 
-    # --- Validación si es un Grupo Puente ---
+    # --- 1. VALIDACIÓN SI ES UN GRUPO ---
     if chat_id < 0:
-        if chat_id not in GRUPOS_AUTORIZADOS:
-            return False, None, "grupo_no_autorizado"
+        # Si el grupo está en la lista de Grupos Puentes Autorizados -> PASE VIP (Infinito)
+        if chat_id in GRUPOS_AUTORIZADOS:
+            grupo_info = GRUPOS_AUTORIZADOS[chat_id]
+            
+            # Verificar si la licencia del grupo puente ha expirado
+            fecha_exp_str = grupo_info.get("fecha_expiracion")
+            if fecha_exp_str:
+                try:
+                    fecha_exp = datetime.strptime(fecha_exp_str, "%Y-%m-%d").replace(tzinfo=ZoneInfo("America/Lima"))
+                except Exception:
+                    fecha_exp = datetime.strptime(fecha_exp_str, "%Y-%m-%d")
+                    
+                if hoy_dt > fecha_exp:
+                    return False, (
+                        "⚠️ <b>¡La licencia de este Grupo Puente ha expirado!</b>\n\n"
+                        "❌ El tiempo de alquiler o activación del grupo ha concluido y el bot ha suspendido el servicio.\n\n"
+                        "📱 <b>¿Deseas renovar el Grupo Puente?</b>\n"
+                        "✅ Contacta inmediatamente con el administrador para adquirir una nueva licencia."
+                    ), "grupo_expirado"
 
-        grupo_info = GRUPOS_AUTORIZADOS[chat_id]
-        
-        # Verificar si la licencia del grupo puente ha expirado
-        fecha_exp_str = grupo_info.get("fecha_expiracion")
-        if fecha_exp_str:
-            try:
-                fecha_exp = datetime.strptime(fecha_exp_str, "%Y-%m-%d").replace(tzinfo=ZoneInfo("America/Lima"))
-            except Exception:
-                fecha_exp = datetime.strptime(fecha_exp_str, "%Y-%m-%d")
-                
-            if hoy_dt > fecha_exp:
-                return False, (
-                    "⚠️ <b>¡La licencia de este Grupo Puente ha expirado!</b>\n\n"
-                    "❌ El tiempo de alquiler o activación del grupo ha concluido y el bot ha suspendido el servicio.\n\n"
-                    "📱 <b>¿Deseas renovar el Grupo Puente?</b>\n"
-                    "✅ Contacta inmediatamente con el administrador para adquirir una nueva licencia."
-                ), "grupo_expirado"
+            anti_spam = int(grupo_info.get("anti_spam", 5))
+            cooldown = COOLDOWN_GRUPOS.setdefault(chat_id, {})
 
-        anti_spam = int(grupo_info.get("anti_spam", 5))
-        cooldown = COOLDOWN_GRUPOS.setdefault(chat_id, {})
+            # Anti-spam personal dentro del grupo
+            transcurrido = ahora - cooldown.get(user_id, 0)
+            if transcurrido < anti_spam:
+                espera = max(1, int(anti_spam - transcurrido + 0.999))
+                return False, f"⏳ Espera <b>{texto_antispam(espera)}</b> antes de volver a usar un comando.", "antispam"
 
-        # Anti-spam personal dentro del grupo
-        transcurrido = ahora - cooldown.get(user_id, 0)
-        if transcurrido < anti_spam:
-            espera = max(1, int(anti_spam - transcurrido + 0.999))
-            return False, f"⏳ Espera <b>{texto_antispam(espera)}</b> antes de volver a usar un comando.", "antispam"
+            cooldown[user_id] = ahora
+            
+            # 🟢 ¡Acceso ilimitado / VIP concedido en Grupo Puente!
+            return True, (
+                "👥 <b>Grupo Puente Autorizado (VIP)</b>\n"
+                "♾️ Todos los comandos desbloqueados (Ilimitado)"
+            ), "ok"
 
-        cooldown[user_id] = ahora
-        # Continuar con la validación estándar de días / uso diario (igual que en privado)
+        # Si el grupo NO es un grupo puente autorizado, continúa con el flujo estándar (en lugar de bloquearlo)
 
-    else:
-        # --- Validación si es Chat Privado ---
-        anti_spam = 5
-        transcurrido = ahora - COOLDOWN_PRIVADO.get(user_id, 0)
-        if transcurrido < anti_spam:
-            espera = max(1, int(anti_spam - transcurrido + 0.999))
-            return False, f"⏳ Espera <b>{texto_antispam(espera)}</b> antes de usar otro comando.", "antispam"
+    # --- 2. VALIDACIÓN ESTÁNDAR (Para Privados y Grupos No Puentes) ---
+    anti_spam = 5
+    transcurrido = ahora - COOLDOWN_PRIVADO.get(user_id, 0)
+    if transcurrido < anti_spam:
+        espera = max(1, int(anti_spam - transcurrido + 0.999))
+        return False, f"⏳ Espera <b>{texto_antispam(espera)}</b> antes de usar otro comando.", "antispam"
+    COOLDOWN_PRIVADO[user_id] = ahora
 
     tiene_dias, cantidad_dias = consultar_dias_api(user_id)
 
-    # 1. Servicios exclusivos para usuarios con días (tanto en privado como en grupos)
+    # Servicios exclusivos para usuarios con días en chats normales / privados
     if comando in SERVICIOS_SOLO_CON_DIAS:
         if not tiene_dias:
             return False, (
@@ -244,19 +250,15 @@ def evaluar_permiso(chat_id, user_id, comando):
                 "✅ Contacta al administrador."
             ), "requiere_dias"
 
-        if chat_id >= 0:
-            COOLDOWN_PRIVADO[user_id] = ahora
         return True, (
             "🌟 <b>Plan activo</b>\n"
             f"📅 Días restantes: <b>{cantidad_dias}</b>\n"
             f"♾️ Acceso concedido a /{comando}"
         ), "ok"
 
-    # 2. Servicio /yape (1 consulta gratis diaria o ilimitada si tiene días)
+    # Servicio /yape (1 consulta gratis diaria o ilimitada si tiene días)
     if comando in SERVICIOS_CON_GRATIS:
         if tiene_dias:
-            if chat_id >= 0:
-                COOLDOWN_PRIVADO[user_id] = ahora
             return True, (
                 "🌟 <b>Plan activo</b>\n"
                 f"📅 Días restantes: <b>{cantidad_dias}</b>\n"
@@ -287,8 +289,6 @@ def evaluar_permiso(chat_id, user_id, comando):
                 print(f"❌ No se pudo guardar el contador diario: {error}")
                 return False, "⚠️ No se pudo registrar tu consulta. Intenta nuevamente.", "error"
 
-        if chat_id >= 0:
-            COOLDOWN_PRIVADO[user_id] = ahora
         return True, (
             "🎁 <b>Plan gratuito</b>\n"
             f"📊 Consulta Yape diaria: <b>{usados + 1}/1</b>\n"
@@ -609,8 +609,126 @@ def registrar_beta(bot):
             guardar_grupos()
             bot.reply_to(
                 message,
-                f"✅ <b>Grupo Puente Autorizado con Éxito</b>\n\n"
+                f"✅ <b>Grupo Puente Autorizado con Éxito (VIP)</b>\n\n"
                 f"🆔 ID del Chat: <code>{group_id}</code>\n"
                 f"⏱ AntiSpam: <b>{texto_antispam(anti_spam)}</b>\n"
                 f"📅 Duración: <b>{dias_vigencia} días</b>\n"
-                f"
+                f"⏳ Expira el: <b>{fecha_expiracion}</b>\n"
+                f"♾️ <b>Estado:</b> Comandos ilimitados y desbloqueados para todos en este grupo.",
+                parse_mode="HTML"
+            )
+        except Exception:
+            bot.reply_to(
+                message,
+                "⚠️ <b>Formato incorrecto para agregar grupo puente.</b>\n\n"
+                "Uso:\n"
+                "<code>/addgrupo ID_GRUPO | ANTISPAM | DÍAS</code>\n\n"
+                "✅ Ejemplo:\n"
+                "<code>/addgrupo -1001234567890 | 3s | 15</code>",
+                parse_mode="HTML"
+            )
+
+    @bot.message_handler(commands=["delgrupo"])
+    def eliminar_grupo(message):
+        if message.from_user.id not in ADMIN_IDS:
+            return
+        try:
+            group_id = int(message.text.split()[1])
+            if group_id in GRUPOS_AUTORIZADOS:
+                del GRUPOS_AUTORIZADOS[group_id]
+                guardar_grupos()
+                COOLDOWN_GRUPOS.pop(group_id, None)
+                bot.reply_to(message, f"🗑️ Grupo <code>{group_id}</code> eliminado.", parse_mode="HTML")
+            else:
+                bot.reply_to(message, "⚠️ El grupo no está registrado.", parse_mode="HTML")
+        except Exception:
+            bot.reply_to(message, "Uso: <code>/delgrupo [ID_GRUPO]</code>", parse_mode="HTML")
+
+    TODOS_LOS_COMANDOS = list(NOMBRES_SERVICIOS.keys())
+
+    @bot.message_handler(commands=TODOS_LOS_COMANDOS)
+    def gestor_vouchers_general(message):
+        chat_id = message.chat.id
+        if chat_id < 0 and getattr(message, "sender_chat", None) is not None:
+            bot.reply_to(message, "⚠️ <b>No puedo identificarte individualmente.</b> Desactiva <b>Ser anónimo</b>.", parse_mode="HTML")
+            return
+
+        user_id = message.from_user.id
+        comando = message.text.split()[0].replace("/", "").lower()
+        if "@" in comando:
+            comando = comando.split("@")[0]
+
+        endpoint = f"/{comando}"
+        nombre_servicio = NOMBRES_SERVICIOS.get(comando, comando.capitalize())
+        texto_completo = message.text.strip()
+        partes_comando = texto_completo.split(maxsplit=1)
+
+        if len(partes_comando) == 1:
+            mensaje_ayuda = (
+                f"⚠️ <b>Formato incorrecto.</b>\n\n"
+                f"Uso:\n<code>/{comando} monto|titular|3 dígitos|mensaje|destino</code>\n\n"
+                "✅ <b>Ejemplo de uso:</b>\n\n"
+                f"<pre>"
+                f"/{comando} 150|Pedro Castillo\n"
+                f"/{comando} 150|Pedro Castillo|999\n"
+                f"/{comando} 150|Pedro Castillo|999999999\n"
+                f"/{comando} 150|Pedro Castillo|999|Pago realizado\n"
+                f"/{comando} 150|Pedro Castillo|999|Pago realizado|Plin"
+                f"</pre>"
+            )
+            bot.reply_to(message, mensaje_ayuda, parse_mode="HTML")
+            return
+
+        permitido, info_plan, motivo = evaluar_permiso(chat_id, user_id, comando)
+        if not permitido:
+            if motivo in ["limite_agotado", "grupo_expirado"]:
+                enviar_limite_alcanzado(bot, message, info_plan)
+            elif info_plan:
+                bot.reply_to(message, info_plan, parse_mode="HTML")
+            return
+
+        args_raw = partes_comando[1]
+        parametros = [arg.strip() for arg in args_raw.split("|")]
+        monto = parametros[0] if len(parametros) > 0 else "0"
+        titular = parametros[1] if len(parametros) > 1 else ""
+
+        payload_voucher = {
+            "id": str(user_id),
+            "monto": monto,
+            "nombre": titular
+        }
+        if len(parametros) > 2 and parametros[2]:
+            payload_voucher["digitos"] = parametros[2]
+        if len(parametros) > 3 and parametros[3]:
+            payload_voucher["mensaje"] = parametros[3]
+        if len(parametros) > 4 and parametros[4]:
+            payload_voucher["destino"] = parametros[4]
+
+        msg_espera = bot.reply_to(message, f"⏳ <i>Generando comprobante de <b>{nombre_servicio}</b>...</i>", parse_mode="HTML")
+
+        img_bytes, error = solicitar_voucher_api(endpoint, payload_voucher)
+
+        try:
+            bot.delete_message(chat_id, msg_espera.message_id)
+        except Exception:
+            pass
+
+        if img_bytes:
+            photo_file = io.BytesIO(img_bytes)
+            photo_file.name = "Screenshot_250826.png"
+            caption_respuesta = (
+                f"✅ <b>Voucher {nombre_servicio} generado</b>\n\n"
+                f"💰 <b>Monto:</b> S/ {monto}\n"
+                f"👤 <b>Titular:</b> {titular}\n\n"
+                "👤 <b>Estado del usuario:</b>\n"
+                f"{info_plan}"
+            )
+            bot.send_document(
+                chat_id,
+                document=photo_file,
+                caption=caption_respuesta,
+                reply_to_message_id=message.message_id,
+                parse_mode="HTML"
+            )
+        else:
+            bot.reply_to(message, f"❌ <b>Error:</b> {error}", parse_mode="HTML")
